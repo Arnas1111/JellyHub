@@ -1,0 +1,14 @@
+services:
+  jellyhub:
+    build: .
+    container_name: jellyhub
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:3100:3000"
+    networks:
+      - media
+networks:
+  media:
+    external: true
+    name: docker_external

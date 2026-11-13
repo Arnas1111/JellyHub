@@ -1,0 +1,178 @@
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+
+const port = Number(process.env.PORT || 3000);
+const jellyfin = (process.env.JELLYFIN_URL || 'http://jellyfin:8096').replace(/\/$/, '');
+const integrations = {
+  seerr: { url: process.env.SEERR_URL, key: process.env.SEERR_API_KEY },
+  sonarr: { url: process.env.SONARR_URL, key: process.env.SONARR_API_KEY, prefix: process.env.SONARR_API_PATH || '/api/v3' },
+  radarr: { url: process.env.RADARR_URL, key: process.env.RADARR_API_KEY, prefix: process.env.RADARR_API_PATH || '/api/v3' },
+  jellystat: { url: process.env.JELLYSTAT_URL },
+  maintainerr: { url: process.env.MAINTAINERR_URL || 'http://Maintainerr:6246' }
+};
+// Read-only Maintainerr adapter; never expose Maintainerr API directly to browsers.
+// Its documented API has no native authentication. Cached results reduce load.
+const maintainerrCache={value:null,expires:0,inFlight:null};
+const DELETING_ACTIONS=new Set([0,1,2,5]);
+async function maintainerrIndex(){
+  if(!integrations.maintainerr.url)return {configured:false,byId:{},entries:[]};
+  if(maintainerrCache.value&&Date.now()<maintainerrCache.expires)return maintainerrCache.value;
+  if(maintainerrCache.inFlight)return maintainerrCache.inFlight;
+  maintainerrCache.inFlight=(async()=>{
+    const collections=await upstream(integrations.maintainerr.url,'api/collections/overlay-data',{timeout:12000});
+    if(!Array.isArray(collections))throw new Error('Unexpected Maintainerr collections response');
+    const byId={}; const entries=[];
+    for(const c of collections){
+      if(c.isActive===false||!DELETING_ACTIONS.has(Number(c.arrAction)))continue;
+      // Maintainerr uses null as "due now" in its handler but no countdown in the UI.
+      // Avoid false dates for collections without a configured delay.
+      if(c.deleteAfterDays===null||c.deleteAfterDays===undefined||!Number.isFinite(Number(c.deleteAfterDays))||Number(c.deleteAfterDays)<0)continue;
+      for(const media of (Array.isArray(c.media)?c.media:[])){
+        if(!media?.mediaServerId||!media?.addDate)continue;
+        const added=new Date(media.addDate).getTime();
+        if(!Number.isFinite(added))continue;
+        const at=new Date(added+Number(c.deleteAfterDays)*86400000);
+        const entry={itemId:String(media.mediaServerId),collectionId:c.id,collection:c.title||'Maintainerr',deletionDate:at.toISOString(),action:Number(c.arrAction)};
+        entries.push(entry);
+        const old=byId[entry.itemId];
+        if(!old||entry.deletionDate<old.deletionDate)byId[entry.itemId]=entry;
+      }
+    }
+    return {configured:true,byId,entries,updatedAt:new Date().toISOString()};
+  })();
+  try{const result=await maintainerrCache.inFlight;maintainerrCache.value=result;maintainerrCache.expires=Date.now()+60000;return result}
+  finally{maintainerrCache.inFlight=null}
+}
+const sessions = new Map(); // V0.1 single-instance memory; restart clears sessions
+const attempts = new Map();
+const publicDir = path.resolve('public');
+const mime = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml' };
+const MAX_BODY=8192;
+const json = (res,status,data,headers={}) => send(res,status,JSON.stringify(data),{'Content-Type':'application/json; charset=utf-8',...headers});
+function send(res,status,body,headers={}) { res.writeHead(status,{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',...headers});res.end(body); }
+function parseCookies(req) { return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim().split('=').slice(0,2)).filter(x=>x.length===2)); }
+function authHeader(session,deviceId) { return `MediaBrowser Client="JellyHub", Device="Web", DeviceId="${deviceId}", Version="0.1.0"${session?.token ? `, Token="${session.token}"` : ''}`; }
+async function upstream(base, route, {headers={},method='GET',body,timeout=8000}={}) {
+  if (!base) throw new Error('Service not configured');
+  const controller = new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeout);
+  try {
+    const response=await fetch(new URL(route,base.endsWith('/')?base:base+'/'),{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal});
+    const raw=await response.text(); let data; try {data=JSON.parse(raw)} catch {data={message:raw.slice(0,300)}}
+    if(!response.ok) throw Object.assign(new Error(`Upstream returned ${response.status}`),{status:response.status});
+    return data;
+  } finally {clearTimeout(timer)}
+}
+const jf=(route,s,opts={})=>upstream(jellyfin,route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
+async function readBody(req){let raw='';for await(const part of req){raw+=part;if(raw.length>MAX_BODY)throw Object.assign(new Error('Request too large'),{status:413})}return JSON.parse(raw||'{}')}
+function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
+function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
+const api = async(req,res,url)=>{
+  const method=req.method;
+  if(method!=='GET'){
+    const origin=req.headers.origin;
+    if(origin && origin!==`http://${req.headers.host}` && origin!==`https://${req.headers.host}`) return json(res,403,{error:'Origin rejected'});
+  }
+  if(url.pathname==='/api/login' && method==='POST'){
+    const ip=req.socket.remoteAddress||'unknown';const entry=attempts.get(ip)||{n:0,until:0};
+    if(entry.n>=8&&Date.now()<entry.until)return json(res,429,{error:'Too many login attempts'});
+    const {username,password}=await readBody(req);
+    if(typeof username!=='string'||typeof password!=='string'||!username||username.length>128||password.length>1024)return json(res,400,{error:'Invalid credentials'});
+    const deviceId=crypto.randomUUID();
+    try {
+      const result=await upstream(jellyfin,'Users/AuthenticateByName',{method:'POST',body:{Username:username,Pw:password},headers:{'Authorization':authHeader(null,deviceId),'Content-Type':'application/json'}});
+      if(!result.AccessToken||!result.User?.Id) throw new Error('Invalid login response');
+      const sid=crypto.randomBytes(32).toString('hex');
+      const session={token:result.AccessToken,deviceId,id:result.User.Id,admin:!!result.User.Policy?.IsAdministrator,name:result.User.Name,created:Date.now()};
+      sessions.set(sid,session);attempts.delete(ip);
+      return json(res,200,{user:{id:session.id,name:session.name,admin:session.admin}},{'Set-Cookie':`jh_sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${process.env.COOKIE_SECURE==='1'?'; Secure':''}`});
+    }catch(e){attempts.set(ip,{n:entry.n+1,until:Date.now()+15*60_000});return json(res,401,{error:'Invalid login or Jellyfin unavailable'});}
+  }
+  const sid=parseCookies(req).jh_sid;const s=sessions.get(sid);
+  if(!s||Date.now()-s.created>86400000){sessions.delete(sid);return json(res,401,{error:'Not authenticated'})}
+  if(url.pathname==='/api/logout' && method==='POST'){
+    sessions.delete(sid);
+    jf('Sessions/Logout',s,{method:'POST'}).catch(()=>{});
+    return json(res,200,{ok:true},{'Set-Cookie':'jh_sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});
+  }
+  if(url.pathname==='/api/me') {
+    const me=await jf('Users/Me',s);
+    s.admin=!!me.Policy?.IsAdministrator; s.name=me.Name;
+    return json(res,200,{id:me.Id,name:me.Name,admin:s.admin});
+  }
+  if(url.pathname==='/api/removals'){
+    // Logged-in library users can see scheduled removals. Actual library item
+    // permissions remain enforced by the Jellyfin item endpoints.
+    const index=await maintainerrIndex();
+    const ids=[...new Set((url.searchParams.get('ids')||'').split(',').filter(Boolean))].slice(0,100);
+    if(!ids.length)return json(res,200,{configured:index.configured,byId:{},updatedAt:index.updatedAt||null});
+    for(const id of ids)cleanId(id);
+    // Never expose collection membership for items the user cannot access.
+    const matched=ids.filter(id=>index.byId[id]);
+    const allowed=await Promise.all(matched.map(async id=>{
+      try{const item=await jf(`Users/${s.id}/Items/${id}`,s);return item?.Id===id?id:null}
+      catch{return null}
+    }));
+    const byId=Object.fromEntries(allowed.filter(Boolean).map(id=>[id,index.byId[id]]));
+    return json(res,200,{configured:index.configured,byId,updatedAt:index.updatedAt||null});
+  }
+  if(url.pathname==='/api/admin/removals'){
+    adminOnly(s);
+    const index=await maintainerrIndex();
+    return json(res,200,{configured:index.configured,entries:index.entries,updatedAt:index.updatedAt||null});
+  }
+  if(url.pathname==='/api/home'){
+    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'DateCreated',SortOrder:'Descending',Limit:'32',Fields:'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,CommunityRating',EnableUserData:'true'});
+    const [recent,resume]=await Promise.allSettled([jf(`Users/${s.id}/Items?${q}`,s),jf(`Users/${s.id}/Items/Resume?Limit=18&MediaTypes=Video`,s)]);
+    return json(res,200,{recent:recent.status==='fulfilled'?(recent.value.Items||[]):[],resume:resume.status==='fulfilled'?(resume.value.Items||[]):[],errors:[recent,resume].filter(x=>x.status==='rejected').map(x=>x.reason.message)});
+  }
+  if(url.pathname==='/api/items'){
+    const q=new URLSearchParams({Recursive:'true',Limit:'60',Fields:'Overview,Genres,ProductionYear,CommunityRating',EnableUserData:'true',SortBy:'SortName'});
+    const type=url.searchParams.get('type');if(['Movie','Series','Audio','MusicAlbum'].includes(type))q.set('IncludeItemTypes',type);
+    const search=url.searchParams.get('q');if(search)q.set('SearchTerm',search.slice(0,120));
+    const parent=url.searchParams.get('parent');if(parent)q.set('ParentId',cleanId(parent));
+    return json(res,200,await jf(`Users/${s.id}/Items?${q}`,s));
+  }
+  if(url.pathname==='/api/views')return json(res,200,await jf(`Users/${s.id}/Views`,s));
+  const item=url.pathname.match(/^\/api\/item\/([^/]+)$/);
+  if(item)return json(res,200,await jf(`Users/${s.id}/Items/${cleanId(item[1])}`,s));
+  const image=url.pathname.match(/^\/api\/image\/([^/]+)$/);
+  if(image){
+    const id=cleanId(image[1]);const imageUrl=new URL(`Items/${id}/Images/Primary?maxWidth=420&quality=80`,jellyfin+'/');
+    const r=await fetch(imageUrl,{headers:{Authorization:authHeader(s,s.deviceId)},signal:AbortSignal.timeout(6000)});
+    if(!r.ok)return send(res,404,'Image unavailable');
+    const buf=Buffer.from(await r.arrayBuffer());res.writeHead(200,{'Content-Type':r.headers.get('content-type')||'image/jpeg','Cache-Control':'private, max-age=1800','X-Content-Type-Options':'nosniff'});return res.end(buf);
+  }
+  if(url.pathname==='/api/admin/overview'){
+    adminOnly(s);
+    const services=Object.entries(integrations).map(([name,c])=>({name,configured:!!c.url,...(name==='jellystat'?{status:'adapter pending'}:{})}));
+    const specs=[
+      ['seerr', 'api/v1/request?take=20&skip=0&sort=added',{'X-Api-Key':integrations.seerr.key}],
+      ['sonarr', `${(integrations.sonarr.prefix||'').replace(/^\//,'')}/queue?page=1&pageSize=20`,{'X-Api-Key':integrations.sonarr.key}],
+      ['radarr', `${(integrations.radarr.prefix||'').replace(/^\//,'')}/queue?page=1&pageSize=20`,{'X-Api-Key':integrations.radarr.key}]
+    ];
+    const values=await Promise.all(specs.map(async([name,route,headers])=>{
+      const c=integrations[name];if(!c.url||!c.key)return {name,status:'not configured'};
+      try {const data=await upstream(c.url,route,{headers});return {name,status:'connected',data:name==='seerr'?{requests:(data.results||[]).slice(0,12),total:data.pageInfo?.results??0}:{records:(data.records||[]).slice(0,12),total:data.totalRecords??0}}}catch(e){return {name,status:'error',message:e.message}}
+    }));
+    return json(res,200,{services,integrations:values});
+  }
+  return json(res,404,{error:'Unknown endpoint'});
+};
+
+const server=http.createServer(async(req,res)=>{
+  try {
+    const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
+    if(url.pathname.startsWith('/api/'))return await api(req,res,url);
+    if(req.method!=='GET'&&req.method!=='HEAD')return send(res,405,'Method not allowed');
+    const name=url.pathname==='/'?'index.html':url.pathname.replace(/^\//,'');
+    const file=path.resolve(publicDir,name);
+    if(!file.startsWith(publicDir+path.sep))return send(res,403,'Forbidden');
+    let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
+    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
+    res.end(body);
+  }catch(e){json(res,e.status||502,{error:e.message||'Request failed'});}
+});
+server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${port}`));
