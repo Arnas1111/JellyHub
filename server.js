@@ -1,17 +1,57 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 const port = Number(process.env.PORT || 3000);
-const jellyfin = (process.env.JELLYFIN_URL || 'http://jellyfin:8096').replace(/\/$/, '');
-const integrations = {
-  seerr: { url: process.env.SEERR_URL, key: process.env.SEERR_API_KEY },
-  sonarr: { url: process.env.SONARR_URL, key: process.env.SONARR_API_KEY, prefix: process.env.SONARR_API_PATH || '/api/v3' },
-  radarr: { url: process.env.RADARR_URL, key: process.env.RADARR_API_KEY, prefix: process.env.RADARR_API_PATH || '/api/v3' },
-  jellystat: { url: process.env.JELLYSTAT_URL },
-  maintainerr: { url: process.env.MAINTAINERR_URL || 'http://Maintainerr:6246' }
+// Runtime settings: service addresses default to the user's existing Docker names.
+// Only container plumbing (PORT, CONFIG_DIR and optional COOKIE_SECURE) needs env vars.
+const configDir=process.env.CONFIG_DIR || '/config';
+const configFile=path.join(configDir,'settings.json');
+const defaults={
+  jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
+  seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
+  sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
+  radarrUrl:process.env.RADARR_URL||'http://radarr:7878',
+  jellystatUrl:process.env.JELLYSTAT_URL||'http://jellystat:3000',
+  maintainerrUrl:process.env.MAINTAINERR_URL||'http://Maintainerr:6246',
+  seerrKey:process.env.SEERR_API_KEY||'',
+  sonarrKey:process.env.SONARR_API_KEY||'',
+  radarrKey:process.env.RADARR_API_KEY||''
 };
+let config={...defaults};
+try{
+  const saved=JSON.parse(fsSync.readFileSync(configFile,'utf8'));
+  if(saved&&typeof saved==='object'&&!Array.isArray(saved))config={...config,...Object.fromEntries(Object.entries(saved).filter(([k,v])=>Object.hasOwn(defaults,k)&&typeof v==='string'))};
+}catch(e){if(e.code!=='ENOENT')throw e}
+const integrations={
+  seerr:{url:config.seerrUrl,key:config.seerrKey},
+  sonarr:{url:config.sonarrUrl,key:config.sonarrKey,prefix:'/api/v3'},
+  radarr:{url:config.radarrUrl,key:config.radarrKey,prefix:'/api/v3'},
+  jellystat:{url:config.jellystatUrl},
+  maintainerr:{url:config.maintainerrUrl}
+};
+function refreshIntegrations(){
+  for(const name of ['seerr','sonarr','radarr','jellystat','maintainerr']){
+    integrations[name].url=config[name+'Url'];
+    if(Object.hasOwn(config,name+'Key'))integrations[name].key=config[name+'Key'];
+  }
+  maintainerrCache.value=null;maintainerrCache.expires=0;
+}
+const jellyfin=()=>config.jellyfinUrl.replace(/\/$/,'');
+const settingUrls=['jellyfinUrl','seerrUrl','sonarrUrl','radarrUrl','jellystatUrl','maintainerrUrl'];
+const settingKeys=['seerrKey','sonarrKey','radarrKey'];
+function validServiceUrl(value){
+  if(typeof value!=='string'||value.length>256)return false;
+  try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash&&u.pathname==='/' }catch{return false}
+}
+async function saveConfig(next){
+  await fs.mkdir(configDir,{recursive:true});
+  const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
+  try{await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});throw e}
+  config=next;refreshIntegrations();
+}
 // Read-only Maintainerr adapter; never expose Maintainerr API directly to browsers.
 // Its documented API has no native authentication. Cached results reduce load.
 const maintainerrCache={value:null,expires:0,inFlight:null};
@@ -65,7 +105,7 @@ async function upstream(base, route, {headers={},method='GET',body,timeout=8000}
     return data;
   } finally {clearTimeout(timer)}
 }
-const jf=(route,s,opts={})=>upstream(jellyfin,route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
+const jf=(route,s,opts={})=>upstream(jellyfin(),route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
 async function readBody(req){let raw='';for await(const part of req){raw+=part;if(raw.length>MAX_BODY)throw Object.assign(new Error('Request too large'),{status:413})}return JSON.parse(raw||'{}')}
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
@@ -82,7 +122,7 @@ const api = async(req,res,url)=>{
     if(typeof username!=='string'||typeof password!=='string'||!username||username.length>128||password.length>1024)return json(res,400,{error:'Invalid credentials'});
     const deviceId=crypto.randomUUID();
     try {
-      const result=await upstream(jellyfin,'Users/AuthenticateByName',{method:'POST',body:{Username:username,Pw:password},headers:{'Authorization':authHeader(null,deviceId),'Content-Type':'application/json'}});
+      const result=await upstream(jellyfin(),'Users/AuthenticateByName',{method:'POST',body:{Username:username,Pw:password},headers:{'Authorization':authHeader(null,deviceId),'Content-Type':'application/json'}});
       if(!result.AccessToken||!result.User?.Id) throw new Error('Invalid login response');
       const sid=crypto.randomBytes(32).toString('hex');
       const session={token:result.AccessToken,deviceId,id:result.User.Id,admin:!!result.User.Policy?.IsAdministrator,name:result.User.Name,created:Date.now()};
@@ -101,6 +141,44 @@ const api = async(req,res,url)=>{
     const me=await jf('Users/Me',s);
     s.admin=!!me.Policy?.IsAdministrator; s.name=me.Name;
     return json(res,200,{id:me.Id,name:me.Name,admin:s.admin});
+  }
+  if(url.pathname.startsWith('/api/admin/settings')){
+    adminOnly(s);
+    // Recheck authorization against Jellyfin, not just the login-time claim.
+    const verified=await jf('Users/Me',s);
+    if(!verified.Policy?.IsAdministrator)throw Object.assign(new Error('Administrator required'),{status:403});
+    if(url.pathname==='/api/admin/settings'&&method==='GET'){
+      return json(res,200,{urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]]))});
+    }
+    if(url.pathname==='/api/admin/settings'&&method==='PUT'){
+      const incoming=await readBody(req);
+      if(!incoming||typeof incoming!=='object'||Array.isArray(incoming)||!incoming.urls||!incoming.keys)return json(res,400,{error:'Invalid settings payload'});
+      const next={...config};
+      for(const k of settingUrls){
+        if(!Object.hasOwn(incoming.urls,k))continue;
+        const v=incoming.urls[k];
+        if(!validServiceUrl(v))return json(res,400,{error:`Invalid service address: ${k}`});
+        next[k]=v.replace(/\/$/,'');
+      }
+      // Empty key preserves saved value; clearKeys intentionally removes it.
+      for(const k of settingKeys){
+        if(Object.hasOwn(incoming.keys,k)){
+          if(typeof incoming.keys[k]!=='string'||incoming.keys[k].length>512)return json(res,400,{error:`Invalid key: ${k}`});
+          if(incoming.keys[k])next[k]=incoming.keys[k];
+        }
+      }
+      if(Array.isArray(incoming.clearKeys))for(const k of incoming.clearKeys){if(!settingKeys.includes(k))return json(res,400,{error:'Invalid clear key'});next[k]=''}
+      await saveConfig(next);
+      return json(res,200,{ok:true,urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]]))});
+    }
+    if(url.pathname==='/api/admin/settings/test'&&method==='POST'){
+      const {service}=await readBody(req);
+      const spec={jellyfin:['jellyfinUrl','System/Info/Public',null],seerr:['seerrUrl','api/v1/status',null],sonarr:['sonarrUrl','api/v3/system/status','sonarrKey'],radarr:['radarrUrl','api/v3/system/status','radarrKey'],jellystat:['jellystatUrl','',null],maintainerr:['maintainerrUrl','api/collections/overlay-data',null]}[service];
+      if(!spec)return json(res,400,{error:'Unknown service'});
+      try{await upstream(config[spec[0]],spec[1],{headers:spec[2]&&config[spec[2]]?{'X-Api-Key':config[spec[2]]}:{},timeout:5000});return json(res,200,{status:'connected'})}
+      catch(e){return json(res,200,{status:'error',message:e.message})}
+    }
+    return json(res,405,{error:'Method not allowed'});
   }
   if(url.pathname==='/api/removals'){
     // Logged-in library users can see scheduled removals. Actual library item
@@ -140,7 +218,7 @@ const api = async(req,res,url)=>{
   if(item)return json(res,200,await jf(`Users/${s.id}/Items/${cleanId(item[1])}`,s));
   const image=url.pathname.match(/^\/api\/image\/([^/]+)$/);
   if(image){
-    const id=cleanId(image[1]);const imageUrl=new URL(`Items/${id}/Images/Primary?maxWidth=420&quality=80`,jellyfin+'/');
+    const id=cleanId(image[1]);const imageUrl=new URL(`Items/${id}/Images/Primary?maxWidth=420&quality=80`,jellyfin()+'/');
     const r=await fetch(imageUrl,{headers:{Authorization:authHeader(s,s.deviceId)},signal:AbortSignal.timeout(6000)});
     if(!r.ok)return send(res,404,'Image unavailable');
     const buf=Buffer.from(await r.arrayBuffer());res.writeHead(200,{'Content-Type':r.headers.get('content-type')||'image/jpeg','Cache-Control':'private, max-age=1800','X-Content-Type-Options':'nosniff'});return res.end(buf);
