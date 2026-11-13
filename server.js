@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const port = Number(process.env.PORT || 3000);
 // Runtime settings: service addresses default to the user's existing Docker names.
@@ -87,7 +88,7 @@ async function maintainerrIndex(){
 }
 const sessions = new Map(); // V0.1 single-instance memory; restart clears sessions
 const attempts = new Map();
-const publicDir = path.resolve('public');
+const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 const mime = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml' };
 const MAX_BODY=8192;
 const json = (res,status,data,headers={}) => send(res,status,JSON.stringify(data),{'Content-Type':'application/json; charset=utf-8',...headers});
@@ -106,7 +107,7 @@ async function upstream(base, route, {headers={},method='GET',body,timeout=8000}
   } finally {clearTimeout(timer)}
 }
 const jf=(route,s,opts={})=>upstream(jellyfin(),route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
-async function readBody(req){let raw='';for await(const part of req){raw+=part;if(raw.length>MAX_BODY)throw Object.assign(new Error('Request too large'),{status:413})}return JSON.parse(raw||'{}')}
+async function readBody(req){let raw='';for await(const part of req){raw+=part;if(Buffer.byteLength(raw)>MAX_BODY)throw Object.assign(new Error('Request too large'),{status:413})}try{return JSON.parse(raw||'{}')}catch{throw Object.assign(new Error('Invalid JSON'),{status:400})}}
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
 const api = async(req,res,url)=>{
@@ -132,6 +133,11 @@ const api = async(req,res,url)=>{
   }
   const sid=parseCookies(req).jh_sid;const s=sessions.get(sid);
   if(!s||Date.now()-s.created>86400000){sessions.delete(sid);return json(res,401,{error:'Not authenticated'})}
+  if(url.pathname.startsWith('/api/admin/')){
+    const verified=await jf('Users/Me',s);
+    s.admin=!!verified.Policy?.IsAdministrator;
+    adminOnly(s);
+  }
   if(url.pathname==='/api/logout' && method==='POST'){
     sessions.delete(sid);
     jf('Sessions/Logout',s,{method:'POST'}).catch(()=>{});
@@ -144,9 +150,6 @@ const api = async(req,res,url)=>{
   }
   if(url.pathname.startsWith('/api/admin/settings')){
     adminOnly(s);
-    // Recheck authorization against Jellyfin, not just the login-time claim.
-    const verified=await jf('Users/Me',s);
-    if(!verified.Policy?.IsAdministrator)throw Object.assign(new Error('Administrator required'),{status:403});
     if(url.pathname==='/api/admin/settings'&&method==='GET'){
       return json(res,200,{urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]]))});
     }
@@ -218,10 +221,12 @@ const api = async(req,res,url)=>{
   if(item)return json(res,200,await jf(`Users/${s.id}/Items/${cleanId(item[1])}`,s));
   const image=url.pathname.match(/^\/api\/image\/([^/]+)$/);
   if(image){
-    const id=cleanId(image[1]);const imageUrl=new URL(`Items/${id}/Images/Primary?maxWidth=420&quality=80`,jellyfin()+'/');
+    const id=cleanId(image[1]);
+    await jf(`Users/${s.id}/Items/${id}`,s);
+    const imageUrl=new URL(`Items/${id}/Images/Primary?maxWidth=420&quality=80`,jellyfin()+'/');
     const r=await fetch(imageUrl,{headers:{Authorization:authHeader(s,s.deviceId)},signal:AbortSignal.timeout(6000)});
     if(!r.ok)return send(res,404,'Image unavailable');
-    const buf=Buffer.from(await r.arrayBuffer());res.writeHead(200,{'Content-Type':r.headers.get('content-type')||'image/jpeg','Cache-Control':'private, max-age=1800','X-Content-Type-Options':'nosniff'});return res.end(buf);
+    const buf=Buffer.from(await r.arrayBuffer());res.writeHead(200,{'Content-Type':r.headers.get('content-type')||'image/jpeg','Cache-Control':'private, no-cache','Vary':'Cookie','X-Content-Type-Options':'nosniff'});return res.end(buf);
   }
   if(url.pathname==='/api/admin/overview'){
     adminOnly(s);
@@ -243,14 +248,17 @@ const api = async(req,res,url)=>{
 const server=http.createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
+    if(url.pathname==='/healthz' && ['GET','HEAD'].includes(req.method))return json(res,200,{status:'ok'});
     if(url.pathname.startsWith('/api/'))return await api(req,res,url);
     if(req.method!=='GET'&&req.method!=='HEAD')return send(res,405,'Method not allowed');
     const name=url.pathname==='/'?'index.html':url.pathname.replace(/^\//,'');
     const file=path.resolve(publicDir,name);
-    if(!file.startsWith(publicDir+path.sep))return send(res,403,'Forbidden');
+    if(!file.startsWith(publicDir))return send(res,403,'Forbidden');
     let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
     res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
     res.end(body);
   }catch(e){json(res,e.status||502,{error:e.message||'Request failed'});}
 });
-server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${port}`));
+server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
+server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${server.address().port}`));
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close(()=>process.exit(0));server.closeIdleConnections();setTimeout(()=>process.exit(1),10000).unref()});

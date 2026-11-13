@@ -1,33 +1,46 @@
-# JellyHub (development preview)
+# JellyHub
 
-A separate Jellyfin frontend and administration integration prototype. **Not a production-ready Jellyfin Web replacement**: playback, Jellystat analytics and full permission management are not implemented.
+An independent, modern Jellyfin frontend development preview. Existing Jellyfin and media-management containers stay independent. Playback is not implemented yet.
 
-## Unraid install (no Compose)
+## Unraid installation
 
-- Image: `ghcr.io/arnas1111/jellyhub:dev` (requires a successful GitHub Actions build)
-- Network: `docker_external`
-- Host port `3100` → container TCP port `3000`
-- Path: `/mnt/user/appdata/jellyhub` → `/config` (read/write)
-- Local web UI: `http://YOUR-UNRAID-IP:3100`
-- Internal runtime runs as UID 1000; ensure the appdata folder is writable by UID 1000.
+Import [unraid/my-JellyHub.xml](unraid/my-JellyHub.xml) into `/boot/config/plugins/dockerMan/templates-user/` and add the container using Docker's template menu.
 
-Import `unraid/my-JellyHub.xml` into `/boot/config/plugins/dockerMan/templates-user/` to configure the values automatically.
+| Setting | Value |
+| --- | --- |
+| Image | `ghcr.io/arnas1111/jellyhub:dev` |
+| Network | `docker_external` (must already exist) |
+| Port | Host `3100` to container TCP `3000` |
+| Persistent storage | `/mnt/user/appdata/jellyhub` to `/config`, read/write |
+| Web UI | `http://YOUR-UNRAID-IP:3100/` |
+| Container user | UID/GID `1000:1000` |
 
-Sign in with your existing **Jellyfin administrator account**, then open **Connections** in the sidebar. Enter API keys and change service URLs there; you don't need environment variables for individual integrations.
+Prepare the JellyHub appdata directory so UID 1000 can write to it. Do not change ownership of another application's appdata. The template needs no integration API keys or per-service environment variables.
 
-Default internal service URLs: `http://jellyfin:8096`, `http://Seerr:5055`, `http://sonarr:8989`, `http://radarr:7878`, `http://jellystat:3000`, `http://Maintainerr:6246`.
+JellyHub defaults to `http://jellyfin:8096` for login. If your existing Jellyfin container has a different reachable address, set the advanced **Jellyfin URL** template field before first login. Saved settings take precedence over environment defaults. JellyHub does not attach, restart or reconfigure existing containers; service addresses must already be reachable from `docker_external`.
 
-Click **Save settings** before using **Test connection**. Keys are stored at `/config/settings.json` on the container, without being returned to browsers. Backups of appdata contain these secrets; protect them. Modifying settings requires a Jellyfin administrator session, revalidated against Jellyfin. The integration UI is read-only currently.
+Sign in with your Jellyfin administrator account and open **Connections**. Configure URLs and Seerr/Sonarr/Radarr API keys, save, then test the saved connections. Keys are stored in `/config/settings.json` and are never returned by the settings API. Empty key inputs preserve saved values; use the clear checkbox to remove one. Normal users do not see admin navigation and admin APIs revalidate administrator access with Jellyfin.
 
-### Security
+Default addresses: `http://jellyfin:8096`, `http://Seerr:5055`, `http://sonarr:8989`, `http://radarr:7878`, `http://jellystat:3000`, `http://Maintainerr:6246`. Connection tests report reachability, not full adapter compatibility. Jellystat analytics remain unimplemented.
 
-Run only on a trusted LAN. Web authentication and integration security have **not** undergone a production security audit. Avoid exposing this preview on Traefik/public Internet. By default login cookies lack `Secure` for local HTTP; use `COOKIE_SECURE=1` for HTTPS access. Local settings persistence is plaintext with mode 0600; protect the host directory. Existing Docker containers are not modified.
+Use only on a trusted LAN. This preview has not had a production security audit. Protect appdata backups because settings contain plaintext keys (written with mode 0600). Enable the advanced `COOKIE_SECURE=1` option when using HTTPS. In-memory sessions expire after a day and are cleared by restart. `/healthz` reports JellyHub process health without requiring backend services.
 
-### Development
+## Development and validation
 
-```bash
+Node.js 22 or newer:
+
+```sh
+npm ci
 npm run check
-npm start
+npm test
+npx playwright install chromium
+npm run test:browser
 ```
 
-The `/config` directory must be writable to save settings. The frontend still lacks a Jellyfin-compatible player.
+For local development, set `CONFIG_DIR` to a writable folder and `JELLYFIN_URL` to a reachable server, then run `npm start`. Node does not automatically read `.env`; `.env.example` only documents optional process environment variables. To test with an installed Chromium browser, set `BROWSER_EXECUTABLE` to its executable path.
+
+[Audit and feature status](docs/STATUS.md) separates implemented behavior, mock-based tests and incomplete features. Live compatibility with Jellyfin 12.4.0.0 and the user's integrations has not been verified.
+
+## Container publishing
+
+[GitHub Actions](.github/workflows/container.yml) tests main/dev pushes and pull requests. Publishing runs only after application tests, browser tests, XML validation, Docker build and container smoke tests pass. Main/dev pushes publish `ghcr.io/arnas1111/jellyhub:dev` and a commit tag. See [publishing setup](GITHUB_SETUP.md) for GHCR permissions and visibility.

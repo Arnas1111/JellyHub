@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>JellyHub</Name>
+  <Repository>ghcr.io/arnas1111/jellyhub:dev</Repository>
+  <Registry>https://github.com/Arnas1111/JellyHub/pkgs/container/jellyhub</Registry>
+  <Network>docker_external</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Project>https://github.com/Arnas1111/JellyHub</Project>
+  <Support>https://github.com/Arnas1111/JellyHub/issues</Support>
+  <Overview>Independent Jellyfin frontend development preview. Configure integrations in Connections after signing in as a Jellyfin administrator. Playback is not implemented. Appdata must be writable by UID 1000.</Overview>
+  <Category>MediaServer:Other</Category>
+  <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+  <Config Name="Web UI Port" Target="3000" Default="3100" Mode="tcp" Description="Host port for the web UI." Type="Port" Display="always" Required="true" Mask="false">3100</Config>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/jellyhub" Mode="rw" Description="Persistent settings and API keys. Must be writable by UID 1000." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jellyhub</Config>
+  <Config Name="Jellyfin URL" Target="JELLYFIN_URL" Default="http://jellyfin:8096" Description="Bootstrap address needed for first login. Saved Connections settings override this value." Type="Variable" Display="advanced" Required="false" Mask="false">http://jellyfin:8096</Config>
+  <Config Name="Secure cookies" Target="COOKIE_SECURE" Default="0" Description="Set to 1 when accessing JellyHub through HTTPS." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+</Container>

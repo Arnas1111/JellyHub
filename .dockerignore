@@ -1,0 +1,11 @@
+.git
+.github
+.tools
+node_modules
+*.zip
+node-shasums.txt
+.env*
+tests
+docs
+unraid
+*.md
