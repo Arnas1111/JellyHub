@@ -1,10 +1,10 @@
-# Next release — held for the user's next change list
+# Profiles and server browsing — dev release batch
 
-These changes are local on `work/next-release`. Do not push main/dev or trigger image publication until the user authorizes the next release. The previously pushed playback GUID compatibility repair is also awaiting release; its publishing run was cancelled before the image build.
+Prepared on `work/next-release`; the user authorized pushing and publishing this batch on 2026-11-14. It includes the playback GUID compatibility repair whose previous publishing run was cancelled during the release hold. GitHub Actions validates the complete batch before publishing the dev image.
 
 ## Home and visual polish
 
-- Cards use a green circled check for **In your library**, an indigo circled plus for **Discover**, an amber clock for **Requested**, and a blue service mark for **Managed by Seerr**. Text and icons distinguish states independently of color. Managed-by-Seerr does not imply that the viewer has access to the item in Jellyfin.
+- Cards use a green circled check for **On server**, an indigo circled plus for **Discover**, an amber clock for **Requested**, and a blue service mark for **Managed by Seerr**. Text and icons distinguish states independently of color. Managed-by-Seerr does not imply that the viewer has access to the item in Jellyfin.
 - Native horizontal/vertical scrollbars use a dark track, rounded accent-colored thumb, hover treatment and no arrow buttons in Chromium/WebKit. Firefox uses the standard scrollbar-color/width styling. Keyboard, wheel and touch scrolling remain native. Forced-color mode uses system colors.
 - Home restores the last featured selection and a compressed artwork snapshot from per-user session storage, before the featured refresh finishes. The cache keeps at most eight sanitized titles and one JPEG, expires after an hour and is cleared on sign-out/authentication failure. Stream URLs, credentials and user playback data are never serialized into it. First visits, expired caches and blocked storage use the existing stable loading stage.
 - Cached slides remain static until a successful server refresh. A temporary service failure keeps the last frame and retries after 30 seconds. A fresh empty selection or authentication denial removes the snapshot. Hourly refresh retains the selected title when still present.
@@ -14,7 +14,7 @@ These changes are local on `work/next-release`. Do not push main/dev or trigger 
 
 `npm run check`, `npm test` and all six browser suites pass in local Playwright Chromium with simulated backends and synthetic media. The Node suite has 31 checks: 30 pass on Windows, with the POSIX filesystem-permission check skipped for Linux CI. The new browser checks hold the featured response open across reload, verify cached title/artwork, refresh/error/empty-result behavior, logout clearing, user isolation, distinct badges, scrollbar styles and mobile width. A screenshot was visually inspected using synthetic artwork.
 
-The container smoke-test asset list includes the new browser modules, but Docker/CI has not been run for these held changes. No image or release was published.
+The container smoke-test asset list includes the new browser modules. Docker/CI validation runs as part of the authorized publication workflow; the local checks below do not establish live service compatibility.
 
 ## Server language, browsing, profiles and personal lists
 
@@ -33,4 +33,4 @@ The container smoke-test asset list includes the new browser modules, but Docker
 
 All seven browser suites pass locally in Playwright Chromium. The Node suite now has 35 checks: 34 pass on Windows, and one POSIX permissions check is reserved for Linux. Tests cover real synthetic PNG/JPEG/WebP photo transfers through the app, shared portraits, unchanged login identity, profile persistence, password API calls, stable loading headings, compact keyboard/mobile filters, Movies-only Collections, management collection exclusion/direct-route denial, review display names, request ownership, download percentages and personal watched/resume states.
 
-Backends are simulated. Live Jellyfin/Seerr/Maintainerr compatibility and the next container build remain release gates. My list reflects request records retained by Seerr; it cannot reconstruct records deleted from Seerr or watched history already removed from Jellyfin. Download progress depends on Seerr receiving queue information from its configured services. No release has been authorized for this batch.
+Backends are simulated. Live Jellyfin/Seerr/Maintainerr compatibility still requires deployment validation. My list reflects request records retained by Seerr; it cannot reconstruct records deleted from Seerr or watched history already removed from Jellyfin. Download progress depends on Seerr receiving queue information from its configured services.
