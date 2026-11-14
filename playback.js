@@ -100,6 +100,8 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
     const path=url.pathname,method=req.method;
     if(path==='/api/playback/start'&&method==='POST'){
       const input=await readBody(req),requestedId=cleanId(input.itemId);
+      if(input.preview!==undefined&&typeof input.preview!=='boolean')fail(400,'Invalid preview mode.');
+      const preview=input.preview===true;
       if(!validIndex(input.audioIndex)||!validIndex(input.subtitleIndex))fail(400,'Invalid audio/subtitle track.');
       const startTicks=input.startTicks??null;if(startTicks!==null&&(!Number.isSafeInteger(startTicks)||startTicks<0))fail(400,'Invalid playback position.');
       const maxBitrate=input.maxBitrate??120000000;if(!Number.isSafeInteger(maxBitrate)||maxBitrate<500000||maxBitrate>150000000)fail(400,'Invalid playback quality.');
@@ -111,10 +113,12 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
         if(!next)fail(404,'No available episode found.');item=await allowed(owner,cleanId(next.Id));
       }
       if(!['Movie','Episode','Video'].includes(item.Type))fail(400,'This item is not a playable video.');
-      const position=Math.min(startTicks??item.UserData?.PlaybackPositionTicks??0,item.RunTimeTicks||Number.MAX_SAFE_INTEGER);
+      const duration=(item.RunTimeTicks||0)/10000000;
+      const position=preview?(duration>60?Math.min(120,Math.floor(duration*.08))*10000000:0):Math.min(startTicks??item.UserData?.PlaybackPositionTicks??0,item.RunTimeTicks||Number.MAX_SAFE_INTEGER);
       // Jellyfin's VOD playlists describe the whole title. Seek on that absolute
       // timeline; dynamic HLS segment requests reject non-zero StartTimeTicks.
       const body={UserId:owner.id,DeviceProfile:buildPlaybackProfile({maxBitrate,hevc:input.hevc===true,av1:input.av1===true}),MaxStreamingBitrate:maxBitrate,StartTimeTicks:0,AutoOpenLiveStream:false,EnableDirectPlay:!input.forceTranscode&&!input.burnSubtitles&&input.audioIndex===undefined,EnableDirectStream:true,EnableTranscoding:true,AlwaysBurnInSubtitleWhenTranscoding:input.burnSubtitles===true};
+      if(preview)body.IsPlayback=false;
       if(input.subtitleIndex!==undefined)body.SubtitleStreamIndex=input.subtitleIndex;
       if(input.audioIndex!==undefined)body.AudioStreamIndex=input.audioIndex;
       if(input.sourceId!==undefined){if(typeof input.sourceId!=='string'||input.sourceId.length>100)fail(400,'Invalid media version');body.MediaSourceId=input.sourceId}
@@ -139,13 +143,13 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
       }
       if(!info.PlaySessionId)fail(502,'Jellyfin did not return a playback session ID.');
       if(sessions.size>=500)fail(503,'Too many active playback sessions. Try again shortly.');
-      const id=crypto.randomBytes(24).toString('hex');const ticket={id,owner,itemId:item.Id,source,playSessionId:info.PlaySessionId,positionTicks:position,lastActivity:Date.now(),resources:new Map(),method:playMethod,started:false,runtime:item.RunTimeTicks||0,subtitle:selectedSubtitle,audioIndex:input.audioIndex??source.DefaultAudioStreamIndex};
+      const id=crypto.randomBytes(24).toString('hex');const ticket={id,owner,itemId:item.Id,source,playSessionId:info.PlaySessionId,positionTicks:position,lastActivity:Date.now(),resources:new Map(),method:playMethod,started:false,preview,runtime:item.RunTimeTicks||0,subtitle:selectedSubtitle,audioIndex:input.audioIndex??source.DefaultAudioStreamIndex};
       const resource=register(ticket,target,target);
       sessions.set(id,ticket);
       const tracks=(source.MediaStreams||[]).filter(s=>['Audio','Subtitle'].includes(s.Type)).map(streamDto);
-      const segments=await jf(`MediaSegments/${item.Id}`,owner).then(result=>(result.Items||[]).filter(s=>Number.isFinite(s.StartTicks)&&Number.isFinite(s.EndTicks)&&s.EndTicks>s.StartTicks).map(s=>({id:s.Id,type:s.Type,startTicks:s.StartTicks,endTicks:s.EndTicks}))).catch(()=>[]);
+      const segments=preview?[]:await jf(`MediaSegments/${item.Id}`,owner).then(result=>(result.Items||[]).filter(s=>Number.isFinite(s.StartTicks)&&Number.isFinite(s.EndTicks)&&s.EndTicks>s.StartTicks).map(s=>({id:s.Id,type:s.Type,startTicks:s.StartTicks,endTicks:s.EndTicks}))).catch(()=>[]);
       let episodes=[],seasons=[],nextEpisode=null;
-      if(item.SeriesId){
+      if(item.SeriesId&&!preview){
         ticket.seriesId=cleanId(item.SeriesId);ticket.seasonId=item.SeasonId;
         const q=new URLSearchParams({UserId:owner.id,IsMissing:'false',Limit:'100',Fields:'Overview'});if(item.SeasonId)q.set('SeasonId',cleanId(item.SeasonId));
         const adjacent=new URLSearchParams({UserId:owner.id,IsMissing:'false',AdjacentTo:item.Id,Fields:'Overview'});
@@ -153,8 +157,8 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
         episodes=(list.Items||[]).filter(i=>!i.IsMissing&&!i.IsVirtualItem).map(episodeDto);seasons=(seasonList.Items||[]).map(i=>({id:i.Id,name:i.Name}));ticket.seasons=new Set(seasons.map(s=>s.id));
         const index=(neighbors.Items||[]).findIndex(i=>i.Id===item.Id);if(index>=0&&neighbors.Items[index+1])nextEpisode=episodeDto(neighbors.Items[index+1]);
       }
-      logger.log('info','playback.negotiated',{itemId:item.Id,method:playMethod});
-      json(res,200,{id,item:{id:item.Id,name:item.Name,series:item.SeriesName||'',type:item.Type,year:item.ProductionYear,rating:item.OfficialRating,genres:item.Genres||[]},url:resource,method:playMethod,hls:!useDirect,offsetSeconds:0,startSeconds:position/10000000,runtimeSeconds:(item.RunTimeTicks||source.RunTimeTicks||0)/10000000,sourceId:source.Id,sources:info.MediaSources.map(sourceDto),audioIndex:input.audioIndex??source.DefaultAudioStreamIndex??null,subtitleIndex,tracks,subtitle:selectedSubtitle&&textCodecs.has((selectedSubtitle.Codec||'').toLowerCase())?`/api/playback/${id}/subtitle/${selectedSubtitle.Index}`:null,chapters:(item.Chapters||[]).map((chapter,index)=>({index,name:chapter.Name||`Chapter ${index+1}`,startTicks:chapter.StartPositionTicks,image:!!chapter.ImageTag})),segments,episodes,seasons,seasonId:item.SeasonId||null,nextEpisode});return true;
+      logger.log('info','playback.negotiated',{itemId:item.Id,method:playMethod,preview});
+      json(res,200,{id,preview,clipSeconds:preview?20:undefined,item:{id:item.Id,name:item.Name,series:item.SeriesName||'',type:item.Type,year:item.ProductionYear,rating:item.OfficialRating,genres:item.Genres||[]},url:resource,method:playMethod,hls:!useDirect,offsetSeconds:0,startSeconds:position/10000000,runtimeSeconds:(item.RunTimeTicks||source.RunTimeTicks||0)/10000000,sourceId:source.Id,sources:info.MediaSources.map(sourceDto),audioIndex:input.audioIndex??source.DefaultAudioStreamIndex??null,subtitleIndex,tracks,subtitle:selectedSubtitle&&textCodecs.has((selectedSubtitle.Codec||'').toLowerCase())?`/api/playback/${id}/subtitle/${selectedSubtitle.Index}`:null,chapters:(item.Chapters||[]).map((chapter,index)=>({index,name:chapter.Name||`Chapter ${index+1}`,startTicks:chapter.StartPositionTicks,image:!!chapter.ImageTag})),segments,episodes,seasons,seasonId:item.SeasonId||null,nextEpisode});return true;
     }
     const episodeRoute=path.match(/^\/api\/playback\/([a-f0-9]{48})\/episodes$/);
     if(episodeRoute&&method==='GET'){
@@ -179,6 +183,7 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
       if(!Number.isSafeInteger(input.positionTicks)||input.positionTicks<0||ticket.runtime&&input.positionTicks>ticket.runtime+10000000)fail(400,'Invalid playback report position');ticket.positionTicks=input.positionTicks;
       if(input.event==='stop'){ticket.failed=input.failed===true;await stop(ticket);json(res,200,{ok:true});return true}
       await authorize(ticket);
+      if(ticket.preview){json(res,200,{ok:true});return true}
       const body={ItemId:ticket.itemId,MediaSourceId:ticket.source.Id,PlaySessionId:ticket.playSessionId,PositionTicks:ticket.positionTicks,PlayMethod:ticket.method,CanSeek:true,IsPaused:input.paused===true,IsMuted:input.muted===true,VolumeLevel:Math.max(0,Math.min(100,Number(input.volume)||0)),PlaybackRate:Math.max(.25,Math.min(3,Number(input.rate)||1)),AudioStreamIndex:ticket.audioIndex,SubtitleStreamIndex:ticket.subtitle?.Index??-1};
       const event=input.event==='start'&&!ticket.started?'Sessions/Playing':'Sessions/Playing/Progress';await jf(event,owner,{method:'POST',body});ticket.started=true;json(res,200,{ok:true});return true;
     }

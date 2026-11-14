@@ -14,16 +14,39 @@ export function renderDetail(data,e,prefs={}){
 }
 
 export function mountDetailPreview({api,itemId,root}){
-  let video,disposed=false,clipTimer;
-  root.querySelector('#watch-preview').onclick=async()=>{
-    const button=root.querySelector('#watch-preview'),output=root.querySelector('#detail-preview');button.disabled=true;output.textContent='Preparing preview…';
-    try{const info=await api('/api/preview/'+encodeURIComponent(itemId));if(disposed)return;if(!info.playable){output.textContent=info.reason;button.disabled=false;return}
-      output.innerHTML='<video class="detail-preview-player" controls muted playsinline></video>';video=output.querySelector('video');video.muted=true;video.src=info.url;
-      const finish=()=>{clearTimeout(clipTimer);clipTimer=null;if(disposed)return;video.pause();video.removeAttribute('src');video.load();output.textContent='Preview ended.';button.disabled=false};
-      video.onloadedmetadata=()=>{video.currentTime=Number.isFinite(video.duration)?Math.min(info.startSeconds,Math.max(0,video.duration-1)):info.startSeconds;video.play().catch(()=>{})};
-      video.onplaying=()=>{if(!clipTimer)clipTimer=setTimeout(finish,info.clipSeconds*1000)};
-      video.onended=finish;video.ontimeupdate=()=>{if(video.currentTime>info.startSeconds+info.clipSeconds)finish()};video.onerror=()=>{clearTimeout(clipTimer);if(!disposed){output.textContent='This preview cannot play in this browser.';button.disabled=false}};
-    }catch(error){if(!disposed){output.textContent=error.message;button.disabled=false}}
+  let video,hls,ticket,disposed=false;
+  const button=root.querySelector('#watch-preview'),output=root.querySelector('#detail-preview');
+  const releaseTicket=info=>{if(info)api(`/api/playback/${info.id}/report`,{method:'POST',body:JSON.stringify({event:'stop',positionTicks:0}),keepalive:true}).catch(()=>{})};
+  const cleanup=()=>{
+    hls?.destroy();hls=null;
+    if(video){video.onloadedmetadata=video.ontimeupdate=video.onended=video.onerror=null;video.pause();video.removeAttribute('src');video.load();video=null}
+    const prior=ticket;ticket=null;releaseTicket(prior);
   };
-  return ()=>{disposed=true;clearTimeout(clipTimer);if(video){video.pause();video.removeAttribute('src');video.load()}};
+  const finish=message=>{cleanup();if(!disposed){output.textContent=message;button.disabled=false}};
+  button.onclick=async()=>{
+    button.disabled=true;cleanup();output.textContent='Preparing preview…';
+    try{
+      const info=await api('/api/playback/start',{method:'POST',body:JSON.stringify({itemId,preview:true,maxBitrate:6000000,subtitleIndex:-1})});
+      if(disposed){releaseTicket(info);return}ticket=info;
+      output.innerHTML='<video class="detail-preview-player" controls playsinline></video><button type="button" class="ghost" data-stop-preview>Close preview</button><span class="preview-status" role="status"></span>';
+      video=output.querySelector('video');const target=video,status=output.querySelector('.preview-status');
+      output.querySelector('[data-stop-preview]').onclick=()=>finish('Preview closed.');
+      let initialPositionApplied=false;
+      target.onloadedmetadata=()=>{
+        if(disposed||target!==video)return;
+        if(!initialPositionApplied){initialPositionApplied=true;target.currentTime=Number.isFinite(target.duration)?Math.min(info.startSeconds,Math.max(0,target.duration-1)):info.startSeconds}
+        target.play().catch(()=>{if(target===video)status.textContent='Press Play to start the preview.'});
+      };
+      target.ontimeupdate=()=>{if(target.currentTime>=info.startSeconds+info.clipSeconds)finish('Preview ended.')};
+      target.onended=()=>finish('Preview ended.');target.onerror=()=>finish('The preview could not be decoded. Try again or use the full player’s quality settings.');
+      if(info.hls&&!target.canPlayType('application/vnd.apple.mpegurl')){
+        const {default:Hls}=await import('./vendor/hls.min.mjs');if(disposed||target!==video)return;
+        if(!Hls.isSupported())throw Error('This browser does not support HLS previews.');
+        hls=new Hls({enableWorker:true,startPosition:info.startSeconds,maxBufferLength:10,maxMaxBufferLength:20,backBufferLength:0});
+        hls.on(Hls.Events.ERROR,(_,error)=>{if(error.fatal)finish('Jellyfin could not deliver a playable preview. Try again or check its transcoding logs.')});
+        hls.attachMedia(target);hls.loadSource(info.url);
+      }else target.src=info.url;
+    }catch(error){finish(error.message)}
+  };
+  return ()=>{disposed=true;cleanup()};
 }

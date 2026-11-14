@@ -6,6 +6,12 @@ Prepared on `work/next-release`; the user authorized pushing and publishing this
 
 The filter controls and custom navigation no longer require `crypto.randomUUID`, which is unavailable on ordinary HTTP LAN origins. UI IDs use `crypto.getRandomValues`, which works there. The browser regression suite now uses a non-loopback HTTP hostname and explicitly checks that the secure-context-only API is absent before exercising Movies, TV Shows, My List, filters and collections. The original failure was reproduced in that environment before applying the repair.
 
+## Seeking and manual previews
+
+- The player keeps a drag's selected position steady until release, instead of allowing playback time updates to overwrite it. Keyboard seeking also commits the chosen position. Resume positioning runs once per stream, and progress is reported after a seek finishes.
+- “Watch preview” uses the authenticated playback pipeline for direct play or Jellyfin HLS remuxing/transcoding, at up to 6 Mbps. It plays a 20-second excerpt from the server's media, with sound and native video controls; it is not an externally sourced trailer. Closing, ending or leaving the preview cleans up the stream and any encoding. Preview tickets cannot send watched/resume updates to Jellyfin. Background carousel previews retain their lightweight direct-play path.
+- Regression validation uses actual MP4/HLS decoding against simulated Jellyfin. The drag regression fails against the old player (8.4 seconds overwritten with 3 seconds) and passes with the repair. Checks cover forward/backward dragging in direct/HLS playback, keyboard seeking, repeated metadata, preview decoding, cleanup and watch-state isolation. Live server playback still requires a user retry.
+
 ## Home and visual polish
 
 - Cards use a green circled check for **On server**, an indigo circled plus for **Discover**, an amber clock for **Requested**, and a blue service mark for **Managed by Seerr**. Text and icons distinguish states independently of color. Managed-by-Seerr does not imply that the viewer has access to the item in Jellyfin.

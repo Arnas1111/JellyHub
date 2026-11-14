@@ -45,6 +45,8 @@ try{
     if(url.pathname==='/api/home')return reply({recent:[libraryItem],resume:[]});
     if(url.pathname==='/api/featured'){await featuredReady;return reply({items:[libraryItem,seriesItem,...Array.from({length:6},(_,index)=>({...libraryItem,Id:'featured'+index,Name:'Featured Movie '+(index+3)}))],source:'popular',reshuffleAt:Math.floor(Date.now()/3600000)*3600000+3600000})}
     if(url.pathname.startsWith('/api/preview/'))return reply({playable:true,url:'/api/preview-stream/test-clip',startSeconds:0,clipSeconds:20,container:'webm'});
+    if(url.pathname==='/api/playback/start')return reply({id:'preview-test',url:'/api/preview-stream/test-clip',startSeconds:0,clipSeconds:20,hls:false});
+    if(url.pathname==='/api/playback/preview-test/report')return reply({ok:true});
     if(url.pathname==='/api/preview-stream/test-clip')return route.fulfill({status:200,contentType:'video/webm',body:clip});
     if(url.pathname.startsWith('/api/backdrop/'))return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><defs><linearGradient id="g"><stop stop-color="#19354c"/><stop offset="1" stop-color="#7b4b5f"/></linearGradient></defs><path fill="url(#g)" d="M0 0h1920v1080H0z"/></svg>'});
     if(url.pathname==='/api/continue')return reply({Items:url.searchParams.get('type')==='Movie'?[libraryItem]:[episode]});

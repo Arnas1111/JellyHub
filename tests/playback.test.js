@@ -23,6 +23,21 @@ test('Jellyfin GUID formats and root-relative HLS URLs retain the configured URL
   assert.throws(()=>resolvePlaybackResource('http://external.test/videos/'+hyphenated+'/master.m3u8',base,compact,base),error=>error.code==='PLAYBACK_RESOURCE_ORIGIN');
 });
 
+test('manual previews negotiate HLS without changing watch state and clean up their encoding',async t=>{
+  const fixture=await startPlaybackFixture();t.after(()=>fixture.close());
+  const login=await fetch(fixture.base+'/api/login',{method:'POST',body:JSON.stringify({username:'viewer',password:'fixture'})});
+  const cookie=login.headers.get('set-cookie').split(';')[0];
+  const request=(path,body)=>fetch(fixture.base+path,{method:body?'POST':'GET',headers:{Cookie:cookie},body:body?JSON.stringify(body):undefined});
+  const response=await request('/api/playback/start',{itemId:'movie-hls',preview:true,maxBitrate:6000000,subtitleIndex:-1});assert.equal(response.status,200);
+  const info=await response.json();assert.equal(info.preview,true);assert.equal(info.hls,true);assert.equal(info.startSeconds,0,'Previews do not inherit the saved resume position');assert.equal(info.clipSeconds,20);assert.equal(fixture.playbackInfo.at(-1).IsPlayback,false);
+  assert.equal((await request(info.url)).status,200);
+  for(const event of ['start','progress'])assert.equal((await request(`/api/playback/${info.id}/report`,{event,positionTicks:50000000})).status,200);
+  assert.equal(fixture.reports.length,0,'Preview reports cannot mutate watch progress');
+  fixture.setAllowed(false);assert.equal((await request(info.url)).status,403);fixture.setAllowed(true);
+  assert.equal((await request(`/api/playback/${info.id}/report`,{event:'stop',positionTicks:0})).status,200);
+  assert.equal(fixture.reports.length,0);assert.ok(fixture.calls.some(call=>call.path==='/Videos/ActiveEncodings'&&call.method==='DELETE'));assert.equal((await request(info.url)).status,403);
+});
+
 test('full playback negotiates, proxies HLS/ranges/subtitles, reports progress and isolates sessions',async t=>{
   const fixture=await startPlaybackFixture();t.after(()=>fixture.close());
   const request=(route,{cookie,method='GET',body,headers={}}={})=>fetch(fixture.base+route,{method,headers:{...(cookie?{Cookie:cookie}:{}),...headers},body:body?JSON.stringify(body):undefined});

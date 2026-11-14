@@ -7,6 +7,7 @@ const ticks=seconds=>Math.max(0,Math.round((seconds||0)*10000000));
 
 export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTicks}){
   let endedReport=false;
+  let scrubbing=false,initialPositionApplied=false;
   let info,hls,prefs={...defaults},disposed=false,started=false,restarting=false,reportQueue=Promise.resolve(),hideTimer,reportTimer,nextTimer,startInfoTimer,holdTimer,priorRate,suppressClick=false,wasPlaying=false,autoSkipped=new Set(),bookmarks=[],nextCancelled=false;
   let options={itemId,...(startTicks!==undefined?{startTicks}:{})};
   const oldOverflow=document.body.style.overflow;document.body.style.overflow='hidden';
@@ -45,7 +46,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
       const probe=document.createElement('video');
       const data=await api('/api/playback/start',{method:'POST',body:JSON.stringify({...options,hevc:!!probe.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'),av1:!!probe.canPlayType('video/mp4; codecs="av01.0.05M.08"')})});
       if(disposed){api(`/api/playback/${data.id}/report`,{method:'POST',body:JSON.stringify({event:'stop',positionTicks:ticks(data.startSeconds)})}).catch(()=>{});return}
-      info=data;root.querySelector('.player-title').textContent=data.item.name;root.querySelector('.player-series').textContent=data.item.series;root.querySelector('.player-method').textContent=data.method==='DirectPlay'?'Direct play':data.method==='DirectStream'?'Direct stream':'Transcoding';
+      info=data;scrubbing=false;initialPositionApplied=false;root.querySelector('.player-title').textContent=data.item.name;root.querySelector('.player-series').textContent=data.item.series;root.querySelector('.player-method').textContent=data.method==='DirectPlay'?'Direct play':data.method==='DirectStream'?'Direct stream':'Transcoding';
       options.itemId=data.item.id;seek.max=String(runtime()||1);seek.value=String(data.startSeconds);video.volume=prefs.volume/100;video.muted=prefs.muted;video.playbackRate=prefs.rate;volume.value=String(prefs.volume);setSubtitles();markers();
       root.querySelector('[data-action="episodes"]').hidden=!data.episodes.length;root.querySelector('[data-action="chapters"]').hidden=!data.chapters.length;
       if(data.hls&&!video.canPlayType('application/vnd.apple.mpegurl')){
@@ -59,7 +60,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
     }catch(error){if(!disposed)showFailure(error.message)}finally{restarting=false}
   }
   function showFailure(message){loading.hidden=false;loading.replaceChildren();const text=document.createElement('p');text.textContent=message;const retry=document.createElement('button');retry.className='primary';retry.textContent='Retry playback';retry.onclick=()=>begin({startTicks:ticks(position())});loading.append(text,retry);if(info?.method==='DirectPlay'){const compatible=document.createElement('button');compatible.className='ghost';compatible.textContent='Use compatible playback';compatible.onclick=()=>begin({forceTranscode:true,startTicks:ticks(position())});loading.append(compatible)}showControls()}
-  function seekTo(seconds){const target=Math.max(0,Math.min(runtime()-.1,seconds));if(!Number.isFinite(target))return;video.currentTime=target;seek.value=String(target);if(started)queueReport('progress').catch(()=>{});showControls()}
+  function seekTo(seconds){if(!info||!runtime())return;const target=Math.max(0,Math.min(runtime()-.1,seconds));if(!Number.isFinite(target))return;initialPositionApplied=true;video.currentTime=target;seek.value=String(target);root.querySelector('.player-time').textContent=clock(target)+' / '+clock(runtime());showControls()}
   function toggle(){if(!info)return;if(video.ended){begin({startTicks:0});return}if(video.paused)video.play().catch(()=>notify('Press Play to start playback.'));else video.pause()}
   async function saveBookmark(){if(!info)return;try{const bookmark=await api('/api/bookmarks',{method:'POST',body:JSON.stringify({itemId:info.item.id,positionTicks:ticks(position()),label:''})});bookmarks.unshift(bookmark);markers();notify('Bookmark saved at '+clock(position()))}catch(error){notify(error.message)}}
   function showPanel(kind){
@@ -96,7 +97,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
     const next=nextEpisode();if(!next||nextCancelled)return;const box=root.querySelector('.player-next');box.hidden=false;box.querySelector('h2').textContent=prefs.spoilerGuard&&!next.played?'Next episode':next.name;
     if(ended&&prefs.autoNext&&!nextTimer){let remaining=8;box.querySelector('p').textContent=`Starting in ${remaining} seconds`;nextTimer=setInterval(()=>{remaining--;box.querySelector('p').textContent=`Starting in ${remaining} seconds`;if(remaining<=0){clearInterval(nextTimer);nextTimer=null;onPlay(next.id)}},1000)}
   }
-  video.onloadedmetadata=()=>{if(!info)return;seek.max=String(runtime());if(info.startSeconds>0&&Math.abs(video.currentTime-info.startSeconds)>2)video.currentTime=info.startSeconds;video.play().catch(()=>{loading.hidden=true;notify('Press Play to start playback.');showControls()})};
+  video.onloadedmetadata=()=>{if(!info||initialPositionApplied)return;seek.max=String(runtime());initialPositionApplied=true;if(info.startSeconds>0&&Math.abs(video.currentTime-info.startSeconds)>2)video.currentTime=info.startSeconds;video.play().catch(()=>{loading.hidden=true;notify('Press Play to start playback.');showControls()})};
   video.onplaying=()=>{
     if(!info)return;loading.hidden=true;root.querySelector('[data-action="toggle"]').innerHTML=icon('pause');
     if(!started){started=true;queueReport('start').catch(()=>notify('Playback started, but Jellyfin could not record the session.'));if(prefs.showStartInfo){const card=root.querySelector('.player-start-info');card.textContent=[info.item.rating,...info.item.genres].filter(Boolean).join(' · ');card.hidden=!card.textContent;startInfoTimer=setTimeout(()=>card.hidden=true,6000)}}showControls();
@@ -104,10 +105,16 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   video.onpause=()=>{if(disposed||!screen.isConnected)return;root.querySelector('[data-action="toggle"]').innerHTML=icon('play');screen.classList.add('is-paused');showControls();if(started&&!restarting)queueReport('progress').catch(()=>{})};
   video.addEventListener('playing',()=>screen.classList.remove('is-paused'));
   video.onwaiting=()=>{if(info&&!video.paused){loading.hidden=false;loading.textContent='Buffering…'}};
-  video.ontimeupdate=()=>{if(!info)return;seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime());checkSegments();if(runtime()-position()<90)showNext()};
+  video.ontimeupdate=()=>{if(!info||scrubbing)return;seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime());checkSegments();if(runtime()-position()<90)showNext()};
+  video.onseeked=()=>{if(started&&!restarting&&!scrubbing)queueReport('progress').catch(()=>{})};
   video.onended=()=>{clearInterval(reportTimer);reportTimer=null;if(started){queueReport('stop',true).catch(()=>{});endedReport=true}showNext(true);showControls()};
   video.onerror=()=>{if(!info||restarting)return;showFailure('This stream could not play. Try a lower quality or a different audio track.')};
-  seek.oninput=()=>{root.querySelector('.player-time').textContent=clock(Number(seek.value))+' / '+clock(runtime());showControls()};seek.onchange=()=>seekTo(Number(seek.value));
+  seek.onpointerdown=()=>{scrubbing=true;showControls()};
+  seek.oninput=()=>{scrubbing=true;root.querySelector('.player-time').textContent=clock(Number(seek.value))+' / '+clock(runtime());showControls()};
+  const commitSeek=()=>{if(!scrubbing)return;const target=Number(seek.value);scrubbing=false;seekTo(target)};
+  seek.onchange=commitSeek;seek.onblur=commitSeek;
+  seek.onpointerup=()=>{queueMicrotask(commitSeek)};
+  seek.onpointercancel=()=>{scrubbing=false;seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime())};
   volume.oninput=()=>{video.volume=Number(volume.value)/100;video.muted=false;prefs.volume=Number(volume.value);showControls()};volume.onchange=()=>savePreferences({volume:Number(volume.value)});
   root.addEventListener('click',async event=>{
     const action=event.target.closest('[data-action]')?.dataset.action;if(!action)return;
