@@ -19,6 +19,9 @@ export function visibleItems(items,config,userId){const hidden=new Set(stateOf(c
 export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig,getManagementCollections=async()=>managementIds(getConfig())}){
   return async(req,res,url,user)=>{
     const route=url.pathname;
+    if(route==='/api/active-streams/count'&&req.method==='GET'){
+      const sessions=await jf('Sessions',user);json(res,200,{count:(Array.isArray(sessions)?sessions:[]).filter(session=>session.NowPlayingItem).length});return true;
+    }
     if(route==='/api/active-streams'&&req.method==='GET'){
       if(!featurePermissions(getConfig(),user.id,user.admin).streams)fail(403,'Active Streams are disabled for this account.');const sessions=await jf('Sessions',user),candidates=(Array.isArray(sessions)?sessions:[]).filter(session=>session.NowPlayingItem).slice(0,200),visible=[];
       for(let index=0;index<candidates.length;index+=8){const batch=await Promise.all(candidates.slice(index,index+8).map(async session=>{if(user.admin)return session;try{await jf(`Users/${user.id}/Items/${cleanId(session.NowPlayingItem.Id)}`,user);return session}catch{return null}}));visible.push(...batch.filter(Boolean))}

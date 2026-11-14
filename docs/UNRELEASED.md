@@ -16,6 +16,8 @@ The filter controls and custom navigation no longer require `crypto.randomUUID`,
 
 ### Requests and Active Streams update
 
+Follow-up: Active Streams is always shown in navigation. Its orange count updates every 15 seconds on authenticated pages, independently of detail-view permission. A disabled button and explanatory tooltip prevent entry without permission, while direct detail API requests remain denied. The separate count endpoint returns only `{count}` and preserves Jellyfin's caller-specific session visibility. Counts are cleared on logout, failed requests show a dash, and in-flight responses cannot update a later login's count. Regression checks cover a locked entry with a visible orange `1`, count updates to `2`, and count access without detail access.
+
 - Removed the extra “On this server” headings. Requests is a dedicated navigation section with All Requests and My Requests; request history has moved out of My List. Existing `#favorites?source=requests` links redirect to My Requests.
 - Requests includes active download progress, sizes and ETA when known, requester display names/initials, media details/play actions, status filters, release dates and paged coming-soon results. Seerr's verified actor and view-request permissions determine whether All Requests can include other users. My Requests always checks ownership. Private download filenames, IDs, API keys and requester email addresses are omitted.
 - Coming-soon queries scan at most 250 source rows per continuation page. Active downloads cover the latest 100 processing requests, with a visible limit notice when applicable. Metadata caching and four-worker enrichment bound upstream work.

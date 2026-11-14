@@ -10,6 +10,20 @@ import { renderAccount } from './account.js';
 
 const root=document.querySelector('#app');
 let disposePage=()=>{};
+let streamCountTimer,streamCountController,streamCountEpoch=0;
+function stopStreamCount(){clearTimeout(streamCountTimer);streamCountTimer=null;streamCountEpoch++;streamCountController?.abort();streamCountController=null;state.streamCount=null}
+async function refreshStreamCount(){
+  if(!state.user||streamCountController)return;clearTimeout(streamCountTimer);streamCountTimer=null;
+  if(document.hidden){streamCountTimer=setTimeout(refreshStreamCount,15000);return}
+  const epoch=streamCountEpoch,controller=new AbortController();streamCountController=controller;
+  try{
+    const data=await api('/api/active-streams/count',{signal:controller.signal});if(epoch!==streamCountEpoch)return;
+    state.streamCount=Number.isSafeInteger(data.count)&&data.count>=0?data.count:null;
+  }catch{if(epoch===streamCountEpoch)state.streamCount=null}
+  finally{
+    if(epoch===streamCountEpoch){streamCountController=null;document.querySelectorAll('.stream-count').forEach(badge=>badge.textContent=state.streamCount??'—');const button=document.querySelector('[data-nav="streams"]');if(button)button.setAttribute('aria-description',state.streamCount===null?'Active stream count unavailable':state.streamCount+' active '+(state.streamCount===1?'stream':'streams'));if(state.user)streamCountTimer=setTimeout(refreshStreamCount,15000)}
+  }
+}
 function releasePage(){disposePage();disposePage=()=>{};document.querySelectorAll('.item-actions').forEach(dialog=>dialog.remove())}
 const brandMarkup=()=>`<div class="brand" data-brand><img class="brand-mark" src="${escapeHTML(state.branding.logo||state.branding.favicon)}" alt=""/><span data-brand-text>${escapeHTML(state.branding.name)}</span></div>`;
 const state={user:null,page:'home',adminTab:'general',cache:new Map(),removals:{},revision:0,branding:{title:'JellyHub',name:'jellyhub.',welcome:'Discover your next favorite.',accent:'#9980ff',favicon:'/favicon.svg',logo:'/branding-logo'}};
@@ -36,13 +50,15 @@ function applyBranding(value){
 }
 function shell(){
   releasePage();
-  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...(state.user.permissions?.requests!==false?[['requests','Requests']]:[]),...(state.user.permissions?.streams||state.user.admin?[['streams','Active Streams']]:[]),...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
-  root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" class="${(id===state.page||id==='movies'&&state.page==='collections')?'active':''}">${label}</button>`).join('')}${(state.navigation||[]).map(link=>`<a class="custom-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.title)}</a>`).join('')}</nav></aside><main class="main"><header class="top"><div class="topright"><button class="profile-button" id="account" aria-label="Open profile for ${escapeHTML(state.user.name)}">${state.user.avatar?`<img class="profile-avatar" src="${escapeHTML(state.user.avatar)}" alt=""/>`:`<span class="profile-avatar profile-fallback" aria-hidden="true">${escapeHTML(state.user.name.slice(0,1))}</span>`}<span data-profile-name>${escapeHTML(state.user.name)}</span></button><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
+  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...(state.user.permissions?.requests!==false?[['requests','Requests']]:[]),['streams','Active Streams'],...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
+  root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" ${id==='streams'?`aria-label="Active Streams" ${!state.user.permissions?.streams&&!state.user.admin?'disabled title="Permission required to view stream details"':'title="View active streams"'}`:''} class="${(id===state.page||id==='movies'&&state.page==='collections')?'active':''}">${label}${id==='streams'?`<span class="stream-count" aria-hidden="true">${state.streamCount??'—'}</span>`:''}</button>`).join('')}${(state.navigation||[]).map(link=>`<a class="custom-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.title)}</a>`).join('')}</nav></aside><main class="main"><header class="top"><div class="topright"><button class="profile-button" id="account" aria-label="Open profile for ${escapeHTML(state.user.name)}">${state.user.avatar?`<img class="profile-avatar" src="${escapeHTML(state.user.avatar)}" alt=""/>`:`<span class="profile-avatar profile-fallback" aria-hidden="true">${escapeHTML(state.user.name.slice(0,1))}</span>`}<span data-profile-name>${escapeHTML(state.user.name)}</span></button><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
   document.querySelectorAll('[data-nav]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.nav));
+  if(!streamCountTimer&&!streamCountController)refreshStreamCount();
   document.querySelector('#account').onclick=()=>navigate('account');document.querySelector('#account').onpointerenter=()=>Promise.all(['/api/profile','/api/account','/api/preferences','/api/bookmarks','/api/hidden-items','/api/profile/presets'].map(path=>cached(path,30000).catch(()=>{})));
   document.querySelector('#logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{state.revision++;history.replaceState(null,'','#home');state.page='home';state.adminTab='general';login()}};
 }
 function login(message=''){
+  stopStreamCount();
   releasePage();
   clearFeaturedSnapshots();state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
   root.innerHTML=`<div class="login"><section class="login-card">${brandMarkup()}<h1>Welcome back.</h1><p>Use your existing Jellyfin account.</p><form id="login"><input class="input" name="username" autocomplete="username" placeholder="Username" required/><input class="input" name="password" type="password" autocomplete="current-password" placeholder="Password" required/><button class="primary">Sign in</button><div class="error" id="login-error">${escapeHTML(message)}</div></form></section></div>`;
