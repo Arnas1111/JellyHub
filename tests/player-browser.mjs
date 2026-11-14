@@ -39,6 +39,7 @@ try{
   await page.route('**/api/playback/*/report',async route=>{if(route.request().postDataJSON()?.event==='stop'){reachedStop();await stopGate}await route.continue()});
   await page.getByRole('button',{name:'Return to details',exact:true}).click();await stopReached;await page.evaluate(()=>location.hash='item/episode2');await page.getByRole('heading',{name:'The next episode',exact:true}).waitFor();releaseStop();await page.waitForTimeout(250);
   assert.equal(new URL(page.url()).hash,'#item/episode2','A delayed player close must not overwrite a newer navigation');assert.equal(await page.locator('.player-screen').count(),0);await page.unroute('**/api/playback/*/report');
+  await page.goto(fixture.base+'/#item/0123456789abcdef0123456789abcdef');await page.getByRole('heading',{name:'Direct Test Movie',exact:true}).waitFor();await page.getByRole('button',{name:'Resume',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.main-video')?.videoWidth>0&&document.querySelector('.main-video').currentTime>2);assert.equal(await page.locator('.player-method').textContent(),'Transcoding');
   assert.ok(urls.every(url=>!url.includes('must-never-reach-browser')&&!url.includes('secret-token-')),'Tokens must never appear in browser URLs');
   assert.deepEqual(errors,[]);
   console.log('Player browser checks passed: real MP4/HLS decode, resume, native segment skip, pause, bookmark persistence, subtitle delivery, audio/quality renegotiation and stop/encoding cleanup. Jellyfin API is simulated; fixtures generated locally.');

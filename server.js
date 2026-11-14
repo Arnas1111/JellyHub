@@ -325,12 +325,13 @@ const api = async(req,res,url)=>{
 };
 
 const startupStorage=await storageStatus();
+function urlRoute(value){return String(value||'').split('?')[0].replace(/(\/api\/playback\/)[a-f0-9]{48}/g,'$1[session]')}
 if(!startupStorage.writable)logger.log('warn','config.not_writable',{code:startupStorage.code,configDir,message:startupStorage.message});
 const server=http.createServer(async(req,res)=>requestContext.run({requestId:crypto.randomUUID()},async()=>{
   const requestId=requestContext.getStore().requestId;
   res.setHeader('X-Request-Id',requestId);
   const started=Date.now();
-  res.on('finish',()=>logger.log('debug','request.completed',{method:req.method,path:(req.url||'').split('?')[0],status:res.statusCode,durationMs:Date.now()-started}));
+  res.on('finish',()=>logger.log('debug','request.completed',{method:req.method,path:urlRoute(req.url),status:res.statusCode,durationMs:Date.now()-started}));
   try {
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
     if(['/favicon.ico','/favicon.png','/favicon.svg','/branding-logo'].includes(url.pathname)&&await featureAPI(req,res,url,null))return;
@@ -341,7 +342,7 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
     const file=path.resolve(publicDir,name);
     if(!file.startsWith(publicDir))return send(res,403,'Forbidden');
     if(!await staticAssets(req,res,file))return send(res,404,'Not found');
-  }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});if(res.headersSent){res.destroy();return}json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
+  }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502,...(e.publicMessage?{message:e.publicMessage}:{}),...(e.reason?{reason:e.reason}:{}),method:req.method,route:urlRoute(req.url)});if(res.headersSent){res.destroy();return}json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
 }));
 server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
 server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${server.address().port}`));

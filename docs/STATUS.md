@@ -23,7 +23,7 @@ Other fixes: static assets resolve relative to the server file instead of the sh
 | Maintainerr card/detail countdowns | Browser detail test; HTTP date arithmetic, cache, inactive collection and user item filtering tests | Existing overlay API/action assumptions require live validation |
 | Unraid XML | XML contract check in CI; local PowerShell parsing | No install on the user's Unraid server |
 
-Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 28 Node checks; 27 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge and Playwright Chromium using simulated APIs and locally generated media. A separate browser-clock suite verifies carousel timing. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 29 Node checks; 28 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge and Playwright Chromium using simulated APIs and locally generated media. A separate browser-clock suite verifies carousel timing. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
 
 The Connections update tests current form fields without saving, distinguishes missing keys from rejected keys, normalizes key whitespace, supports service URL bases, aligns clear-key controls and colors results. Structured, configurable logging includes safe endpoint/status/timing diagnostics and request IDs while excluding credentials and response bodies. Tests cover 401s, missing keys, non-JSON login pages, redirects, network failures, log filtering, persistence, and failed-save input preservation. Corrupt JSON startup errors omit file contents.
 
@@ -83,3 +83,7 @@ The Chromium regression suite also holds a stop report open during navigation: d
 - Distributed sessions and a production security audit. No existing backend container was contacted or changed during local tests.
 
 Changing the saved Jellyfin URL to an unreachable address can prevent login; correct `jellyfinUrl` in `/config/settings.json` while JellyHub is stopped, then restart JellyHub. Corrupt settings fail visibly rather than discarding credentials.
+
+## Playback URL compatibility repair
+
+Jellyfin serializes metadata IDs in compact GUID form but its StreamInfo URL builder appends the hyphenated GUID form. The resource guard now compares canonical GUID identities, retains the same-origin/same-item restrictions, and rebases root-relative API URLs beneath the configured Jellyfin URL base. Tests cover both GUID forms, case, URL bases, wrong-item/external/traversal rejection and actual synthetic HLS decoding through the app proxy. Playback validation errors now log a specific code, safe message, rejection reason, method and route; private playback ticket IDs are redacted. The reported live movie still requires a retry on the updated image.

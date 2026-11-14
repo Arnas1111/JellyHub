@@ -43,8 +43,9 @@ export async function startPlaybackFixture(){
     if(url.pathname.endsWith('/Similar'))return json({Items:[]});
     const info=url.pathname.match(/^\/Items\/([^/]+)\/PlaybackInfo$/);
     if(info){
-      playbackInfo.push(body);const transcode=info[1]==='movie-hls'||body.EnableDirectPlay===false;
-      return json({PlaySessionId:'play-session-'+(++startedCount),MediaSources:[{Id:'source1',Name:'Synthetic version',Container:transcode?'mkv':'mp4',SupportsDirectPlay:!transcode,SupportsDirectStream:false,SupportsTranscoding:true,DefaultAudioStreamIndex:1,MediaStreams:streams,Path:'/private/source.mkv',Size:bytes.length,TranscodingUrl:`/Videos/${info[1]}/master.m3u8?api_key=must-never-reach-browser&PlaySessionId=test`}]});
+      playbackInfo.push(body);const transcode=info[1]==='movie-hls'||/^[a-f0-9]{32}$/.test(info[1])||body.EnableDirectPlay===false;
+      const streamId=/^[a-f0-9]{32}$/.test(info[1])?info[1].replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,'$1-$2-$3-$4-$5'):info[1]==='movie-bad-path'?'another-item':info[1];
+      return json({PlaySessionId:'play-session-'+(++startedCount),MediaSources:[{Id:'source1',Name:'Synthetic version',Container:transcode?'mkv':'mp4',SupportsDirectPlay:!transcode,SupportsDirectStream:false,SupportsTranscoding:true,DefaultAudioStreamIndex:1,MediaStreams:streams,Path:'/private/source.mkv',Size:bytes.length,TranscodingUrl:`/videos/${streamId}/master.m3u8?api_key=must-never-reach-browser&PlaySessionId=test`}]});
     }
     if(url.pathname.startsWith('/MediaSegments/'))return json({Items:[{Id:'intro',Type:'Intro',StartTicks:10000000,EndTicks:30000000}]});
     if(url.pathname.startsWith('/Sessions/Playing')){reports.push({path:url.pathname,body});res.writeHead(204);return res.end()}
@@ -65,5 +66,5 @@ export async function startPlaybackFixture(){
   const child=spawn(process.execPath,[fileURLToPath(new URL('../server.js',import.meta.url))],{env:{...process.env,PORT:'0',CONFIG_DIR:dir,JELLYFIN_URL:service,SEERR_URL:service,MAINTAINERR_URL:service}});
   let logs='';child.stderr.on('data',data=>logs+=data);
   const base=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('App startup timeout '+logs)),10000);child.on('exit',code=>{clearTimeout(timeout);reject(Error('Exited '+code+' '+logs))});child.stdout.on('data',data=>{logs+=data;const match=String(data).match(/running on :(\d+)/);if(match){clearTimeout(timeout);resolve(`http://127.0.0.1:${match[1]}`)}})});
-  return {base,calls,reports,playbackInfo,setAllowed:value=>allowPlayback=value,async close(){if(child.exitCode===null){const done=once(child,'exit');child.kill();await done}upstream.closeAllConnections();await new Promise(resolve=>upstream.close(resolve));await rm(dir,{recursive:true,force:true})}};
+  return {base,calls,reports,playbackInfo,logs:()=>logs,setAllowed:value=>allowPlayback=value,async close(){if(child.exitCode===null){const done=once(child,'exit');child.kill();await done}upstream.closeAllConnections();await new Promise(resolve=>upstream.close(resolve));await rm(dir,{recursive:true,force:true})}};
 }

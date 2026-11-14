@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
+const fail=(status,message,code='PLAYBACK_ERROR',details={})=>{throw Object.assign(new Error(message),{status,code,publicMessage:message,...details})};
 const textCodecs=new Set(['srt','subrip','vtt','webvtt','ass','ssa','mov_text','text','ttml']);
 const sourceDto=source=>({id:source.Id,name:source.Name||source.Container||'Version',container:source.Container,bitrate:source.Bitrate,size:source.Size,video:source.MediaStreams?.find(stream=>stream.Type==='Video')?.Codec});
 const streamDto=stream=>({index:stream.Index,type:stream.Type,language:stream.Language||'und',title:stream.DisplayTitle||stream.Title||stream.Language||stream.Codec,codec:stream.Codec,default:!!stream.IsDefault,forced:!!stream.IsForced,text:stream.Type==='Subtitle'&&textCodecs.has((stream.Codec||'').toLowerCase())});
@@ -15,9 +15,15 @@ export function buildPlaybackProfile({maxBitrate=120000000,hevc=false,av1=false}
 
 export function resolvePlaybackResource(value,parent,itemId,base){
   const target=new URL(value,parent),root=new URL(base.endsWith('/')?base:base+'/');
-  if(target.origin!==root.origin||target.username||target.password||target.hash)fail(502,'Jellyfin returned an external playback resource.');
-  const relative=target.pathname.slice(root.pathname.length);
-  if(!target.pathname.startsWith(root.pathname)||!new RegExp(`^(?:Videos|Audio)/${itemId}/`,'i').test(relative)||/%2f|%5c|%2e|\\/i.test(target.pathname))fail(502,'Jellyfin returned an unexpected playback resource path.');
+  if(target.origin!==root.origin||target.username||target.password||target.hash)fail(502,'Jellyfin returned an external playback resource.','PLAYBACK_RESOURCE_ORIGIN');
+  const rejected=reason=>fail(502,'Jellyfin returned an unexpected playback resource path.','PLAYBACK_RESOURCE_PATH',{reason});
+  if(/%2f|%5c|%2e|\\/i.test(String(value).split(/[?#]/,1)[0]))rejected('encoded_or_backslash_path');
+  // StreamInfo.ToUrl emits a root-relative /videos/{Guid:D}/ URL even when
+  // metadata uses Guid:N and Jellyfin has a configured URL base.
+  if(!target.pathname.startsWith(root.pathname)&&/^\/(?:videos|audio)\//i.test(target.pathname))target.pathname=root.pathname+target.pathname.slice(1);
+  const relative=target.pathname.startsWith(root.pathname)?target.pathname.slice(root.pathname.length):'',match=relative.match(/^(?:Videos|Audio)\/([^/]+)\//i);
+  const identity=id=>/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.test(id)?id.replaceAll('-','').toLowerCase():String(id).toLowerCase();
+  if(!match)rejected('outside_item_api_path');if(identity(match[1])!==identity(itemId))rejected('different_item');
   if(!/\.(m3u8|ts|m4s|mp4|m4v|webm|aac|vtt|key)$/i.test(target.pathname)&&!target.pathname.endsWith('/stream'))fail(502,'Unsupported playback resource type.');
   for(const key of [...target.searchParams.keys()])if(/token|api[_-]?key|authorization/i.test(key))target.searchParams.delete(key);
   return target;
@@ -133,8 +139,9 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
       }
       if(!info.PlaySessionId)fail(502,'Jellyfin did not return a playback session ID.');
       if(sessions.size>=500)fail(503,'Too many active playback sessions. Try again shortly.');
-      const id=crypto.randomBytes(24).toString('hex');const ticket={id,owner,itemId:item.Id,source,playSessionId:info.PlaySessionId,positionTicks:position,lastActivity:Date.now(),resources:new Map(),method:playMethod,started:false,runtime:item.RunTimeTicks||0,subtitle:selectedSubtitle,audioIndex:input.audioIndex??source.DefaultAudioStreamIndex};sessions.set(id,ticket);
+      const id=crypto.randomBytes(24).toString('hex');const ticket={id,owner,itemId:item.Id,source,playSessionId:info.PlaySessionId,positionTicks:position,lastActivity:Date.now(),resources:new Map(),method:playMethod,started:false,runtime:item.RunTimeTicks||0,subtitle:selectedSubtitle,audioIndex:input.audioIndex??source.DefaultAudioStreamIndex};
       const resource=register(ticket,target,target);
+      sessions.set(id,ticket);
       const tracks=(source.MediaStreams||[]).filter(s=>['Audio','Subtitle'].includes(s.Type)).map(streamDto);
       const segments=await jf(`MediaSegments/${item.Id}`,owner).then(result=>(result.Items||[]).filter(s=>Number.isFinite(s.StartTicks)&&Number.isFinite(s.EndTicks)&&s.EndTicks>s.StartTicks).map(s=>({id:s.Id,type:s.Type,startTicks:s.StartTicks,endTicks:s.EndTicks}))).catch(()=>[]);
       let episodes=[],seasons=[],nextEpisode=null;
