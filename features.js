@@ -1,4 +1,5 @@
 import {createMyList} from './my-list.js';
+import {featurePermissions} from './profiles.js';
 import {visibleItems,libraryItem} from './core.js';
 import crypto from 'node:crypto';
 
@@ -107,7 +108,15 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
     }
     if(route==='/api/admin/users'&&method==='GET'){
       const [users,folders]=await Promise.all([jf('Users',session),jf('Library/VirtualFolders',session)]);
-      json(res,200,{users:users.map(userDto),libraries:folders.map(f=>({id:f.ItemId,name:f.Name}))});return true;
+      json(res,200,{users:users.map(user=>({...userDto(user),features:featurePermissions(getConfig(),user.Id,!!user.Policy?.IsAdministrator)})),libraries:folders.map(f=>({id:f.ItemId,name:f.Name}))});return true;
+    }
+    const accessRoute=route.match(/^\/api\/admin\/users\/([^/]+)\/features$/);
+    if(accessRoute&&method==='PUT'){
+      const me=await jf('Users/Me',session);if(!me.Policy?.IsAdministrator)fail(403,'Administrator required');
+      const id=cleanId(accessRoute[1]),input=await readBody(req);if(!input||Array.isArray(input)||!Object.keys(input).length||Object.entries(input).some(([key,value])=>!['requests','streams'].includes(key)||typeof value!=='boolean'))fail(400,'Choose valid JellyHub feature permissions.');
+      const target=await jf('Users/'+id,session);
+      await saveConfig(config=>{let state;try{state=JSON.parse(config.userState||'{}')}catch{state={}}const key=Object.keys(state).find(key=>normalizedId(key)===normalizedId(id))||id;state[key]={...state[key],featurePermissions:{...state[key]?.featurePermissions,...input}};return {userState:JSON.stringify(state)}});
+      json(res,200,{features:featurePermissions(getConfig(),id,!!target.Policy?.IsAdministrator)});return true;
     }
     const userRoute=route.match(/^\/api\/admin\/users\/([^/]+)$/);
     if(userRoute&&method==='PUT'){
@@ -142,13 +151,14 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       const page=Number(url.searchParams.get('page')||1);if(!Number.isSafeInteger(page)||page<1||page>500)fail(400,'Search page must be between 1 and 500.');
       const query=(url.searchParams.get('q')||'').trim().slice(0,120);if(!query){json(res,200,{library:[],catalog:[],errors:[]});return true}
       const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,StartIndex:String((page-1)*60),Limit:'60',EnableTotalRecordCount:'true',Fields:'ProviderIds,ProductionYear,Overview'});
-      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:String(page)}),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
+      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{if(!featurePermissions(getConfig(),session.id,session.admin).requests)return {items:[],pages:1};const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:String(page)}),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
       const library=results[0].status==='fulfilled'?results[0].value.Items||[]:[];
       let catalog=[];if(results[1].status==='fulfilled'){let matches=library;try{matches=[...library,...await libraryMatches(session,results[1].value.items.map(item=>item.id))]}catch{/* Search results still work if the optional cross-page matching query fails. */}catalog=attachLibrary(results[1].value.items,matches)}
       const pages=Math.max(1,results[0].status==='fulfilled'?Math.ceil((results[0].value.TotalRecordCount||library.length)/60):1,results[1].status==='fulfilled'?results[1].value.pages:1);
       json(res,200,{library:library.map(libraryItem),catalog,page,pages:Math.min(500,pages),errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
     }
     if(route==='/api/discover'&&method==='GET'){
+      if(!featurePermissions(getConfig(),session.id,session.admin).requests)fail(403,'Requests are disabled for this account.');
       const identity=await seerrIdentity(session);
       const [movies,shows]=await Promise.all(['movies','tv'].map(type=>seerr(`discover/${type}?page=1&sortBy=popularity.desc`,identity.headers)));
       const items=[...(movies.results||[]).map(i=>catalogItem(i,'movie',identity.permissions)),...(shows.results||[]).map(i=>catalogItem(i,'tv',identity.permissions))];
@@ -158,6 +168,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
     if(route==='/api/featured'&&method==='GET'){
       let items=[],source='library';
       try{
+        if(!featurePermissions(getConfig(),session.id,session.admin).requests)throw Error('Requests disabled');
         const identity=await seerrIdentity(session);
         const popular=await Promise.all(['movies','tv'].map(type=>seerr('discover/'+type+'?page=1&sortBy=popularity.desc',identity.headers)));
         const wanted=popular.flatMap((data,index)=>(data.results||[]).map(item=>({id:String(item.id),type:index?'Series':'Movie'})));

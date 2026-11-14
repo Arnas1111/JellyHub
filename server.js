@@ -1,4 +1,4 @@
-import {createProfiles,profileName,profileOf} from './profiles.js';
+import {createProfiles,profileName,profileOf,featurePermissions} from './profiles.js';
 import {managementIds,isManagementCollection} from './collection-visibility.js';
 import {createStaticAssets} from './static-assets.js';
 import http from 'node:http';
@@ -197,6 +197,10 @@ const api = async(req,res,url)=>{
     s.admin=!!verified.Policy?.IsAdministrator;
     adminOnly(s);
   }
+  if(url.pathname==='/api/active-streams'){const verified=await jf('Users/Me',s);s.admin=!!verified.Policy?.IsAdministrator;if(verified.Policy?.IsDisabled)throw Object.assign(Error('This account is disabled.'),{status:403})}
+  const permissions=featurePermissions(config,s.id,s.admin);
+  if((url.pathname==='/api/requests'||url.pathname.startsWith('/api/catalog/'))&&!permissions.requests)throw Object.assign(Error('Requests are disabled for this account.'),{status:403});
+  if(url.pathname==='/api/active-streams'&&!permissions.streams)throw Object.assign(Error('Active Streams are disabled for this account.'),{status:403});
   if(await featureAPI(req,res,url,s))return;
   if(await mediaAPI(req,res,url,s))return;
   if(await playbackAPI(req,res,url,s))return;
@@ -213,7 +217,7 @@ const api = async(req,res,url)=>{
   if(url.pathname==='/api/me') {
     const me=await jf('Users/Me',s);
     s.admin=!!me.Policy?.IsAdministrator; s.name=me.Name;
-    return json(res,200,{id:me.Id,name:profileName(config,s.id,me.Name),username:me.Name,admin:s.admin,avatar:'/api/profile/avatar?v='+encodeURIComponent(profileOf(config,s.id).avatarVersion||me.PrimaryImageTag||'default')});
+    return json(res,200,{id:me.Id,name:profileName(config,s.id,me.Name),username:me.Name,admin:s.admin,permissions:featurePermissions(config,s.id,s.admin),avatar:'/api/profile/avatar?v='+encodeURIComponent(profileOf(config,s.id).avatarVersion||me.PrimaryImageTag||'default')});
   }
   if(url.pathname==='/api/admin/logging'&&method==='PUT'){
     const {level}=await readBody(req);

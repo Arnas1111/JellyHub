@@ -46,7 +46,7 @@ export function createCarousel({root,api,isCurrent,onSelect,escapeHTML:e,metadat
   }
   function createSlide(item,image){
     const slide=document.createElement('article');slide.className='feature-slide';slide.dataset.featureId=item.Id;
-    slide.innerHTML=`<video class="feature-video" muted playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video><div class="feature-shade"></div><div class="feature-copy"><span class="eyebrow">${data.source==='popular'?'Popular on the server':'On this server'}</span><h2 class="featured-title">${e(item.Name)}</h2>${metadata(item,e)}<p class="feature-overview">${e(item.Overview||'Find your next favorite on the server.')}</p><button class="feature-details" data-details><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle class="info-dot" cx="12" cy="7.5" r=".7"/></svg>More information</button></div>`;
+    slide.innerHTML=`<video class="feature-video" muted playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video><div class="feature-shade"></div><div class="feature-copy"><h2 class="featured-title">${e(item.Name)}</h2>${metadata(item,e)}<p class="feature-overview">${e(item.Overview||'Find your next favorite on the server.')}</p><button class="feature-details" data-details><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle class="info-dot" cx="12" cy="7.5" r=".7"/></svg>More information</button></div>`;
     slide.prepend(image);slide.querySelector('[data-details]').onclick=()=>onSelect(item.Id);return slide;
   }
   async function preview(item,slide,version){

@@ -1,4 +1,5 @@
-import {renderMyList} from './my-list.js';
+import {renderStreams} from './streams.js';
+import {renderMyList,renderRequests} from './my-list.js';
 import {watchBadge} from './watch-state.js';
 import {availabilityBadge} from './availability.js';
 import {clearFeaturedSnapshots} from './featured-cache.js';
@@ -35,7 +36,7 @@ function applyBranding(value){
 }
 function shell(){
   releasePage();
-  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
+  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...(state.user.permissions?.requests!==false?[['requests','Requests']]:[]),...(state.user.permissions?.streams||state.user.admin?[['streams','Active Streams']]:[]),...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
   root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" class="${(id===state.page||id==='movies'&&state.page==='collections')?'active':''}">${label}</button>`).join('')}${(state.navigation||[]).map(link=>`<a class="custom-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.title)}</a>`).join('')}</nav></aside><main class="main"><header class="top"><div class="topright"><button class="profile-button" id="account" aria-label="Open profile for ${escapeHTML(state.user.name)}">${state.user.avatar?`<img class="profile-avatar" src="${escapeHTML(state.user.avatar)}" alt=""/>`:`<span class="profile-avatar profile-fallback" aria-hidden="true">${escapeHTML(state.user.name.slice(0,1))}</span>`}<span data-profile-name>${escapeHTML(state.user.name)}</span></button><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
   document.querySelectorAll('[data-nav]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.nav));
   document.querySelector('#account').onclick=()=>navigate('account');document.querySelector('#account').onpointerenter=()=>Promise.all(['/api/profile','/api/account','/api/preferences','/api/bookmarks','/api/hidden-items','/api/profile/presets'].map(path=>cached(path,30000).catch(()=>{})));
@@ -80,7 +81,7 @@ function itemActions(id){
   dialog.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{const action=button.dataset.action,value=action==='hidden'?true:!item.UserData?.[action==='favorite'?'IsFavorite':'Played'];button.disabled=true;try{await api('/api/user-item/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({[action]:value})});invalidate();dialog.close();navigate(state.page==='detail'?'home':state.page)}catch(error){dialog.querySelector('.error').textContent=error.message;button.disabled=false}});
 }
 const section=(title,items,renderer=mediaTile)=>`<section><div class="section-head"><h2>${title}</h2></div>${items.length?`<div class="grid shelf">${items.map(renderer).join('')}</div>`:'<p class="muted">No titles found.</p>'}</section>`;
-const searchForm=query=>`<form id="universal-search" class="universal-search" role="search"><label class="sr-only" for="universal-query">Search movies and shows</label><input class="input" id="universal-query" name="q" type="search" maxlength="120" placeholder="Search movies and shows on the server and beyond" value="${escapeHTML(query)}"/><button class="primary">Search</button></form>`;
+const searchForm=query=>`<form id="universal-search" class="universal-search" role="search"><label class="sr-only" for="universal-query">Search movies and shows</label><input class="input" id="universal-query" name="q" type="search" maxlength="120" placeholder="${state.user.permissions?.requests===false?'Search movies and shows':'Search movies and shows on the server and beyond'}" value="${escapeHTML(query)}"/><button class="primary">Search</button></form>`;
 function bindSearch(){document.querySelector('#universal-search').onsubmit=event=>{event.preventDefault();search(new FormData(event.currentTarget).get('q'))}}
 function recordRoute(route){if(location.hash.slice(1)!==route)history.pushState(null,'','#'+route)}
 async function home(){
@@ -90,7 +91,7 @@ async function home(){
   await Promise.all([
     (async()=>{try{const data=await cached('/api/next-up',15000);if(revision!==state.revision)return;document.querySelector('#next-up').innerHTML=section('Next up',data.Items);bindTiles();loadRemovals()}catch{/* Optional row; other home data remains available. */}})(),
     (async()=>{try{const data=await cached('/api/home');if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=section('Continue watching',data.resume)+section('Recently added',data.recent)+(data.errors?.length?`<p class="error">${escapeHTML(data.errors.join('; '))}</p>`:'');bindTiles();loadRemovals()}catch(error){if(revision===state.revision)document.querySelector('#rows').innerHTML=errorHTML(error)}})(),
-    (async()=>{try{const data=await cached('/api/discover');if(revision!==state.revision)return;document.querySelector('#discovery').innerHTML=section('Popular movies',data.movies,catalogTile)+section('Popular shows',data.shows,catalogTile);bindTiles()}catch(error){if(revision===state.revision)document.querySelector('#discovery').innerHTML=`<p class="notice">Recommendations unavailable: ${escapeHTML(error.message)}</p>`}})()
+    (async()=>{if(state.user.permissions?.requests===false){document.querySelector('#discovery').replaceChildren();return}try{const data=await cached('/api/discover');if(revision!==state.revision)return;document.querySelector('#discovery').innerHTML=section('Popular movies',data.movies,catalogTile)+section('Popular shows',data.shows,catalogTile);bindTiles()}catch(error){if(revision===state.revision)document.querySelector('#discovery').innerHTML=`<p class="notice">Recommendations unavailable: ${escapeHTML(error.message)}</p>`}})()
   ]);
 }
 async function search(query='',page=1){
@@ -143,6 +144,13 @@ async function showCatalog(type,id){
 async function showMyList(options={}){
   const revision=++state.revision;state.page='favorites';const params=new URLSearchParams(Object.entries(options).map(([key,value])=>[key,String(value)]));recordRoute('favorites'+(params.size?'?'+params:''));shell();return renderMyList({state,api,cached,content,escapeHTML,mediaTile,bindTiles,loadRemovals,isCurrent:()=>revision===state.revision,reload:showMyList,onItem:showItem,onCatalog:showCatalog,invalidate,setDispose:fn=>disposePage=fn},options);
 }
+async function showRequests(options={}){
+  if(state.user.permissions?.requests===false){content('<h1 class="heading">Requests</h1><p class="notice">Requests are disabled for this account.</p>');return}
+  const revision=++state.revision;state.page='requests';const params=new URLSearchParams(Object.entries(options).map(([key,value])=>[key,String(value)]));recordRoute('requests'+(params.size?'?'+params:''));shell();return renderRequests({api,cached,content,escapeHTML,isCurrent:()=>revision===state.revision,reload:showRequests,onItem:showItem,onCatalog:showCatalog,onPlay:startPlayback,setDispose:fn=>disposePage=fn},options);
+}
+async function showStreams(){
+  const revision=++state.revision;state.page='streams';recordRoute('streams');shell();return renderStreams({api,content,escapeHTML,isCurrent:()=>revision===state.revision,setDispose:fn=>disposePage=fn});
+}
 async function startPlayback(itemId,startTicks){
   recordRoute('play/'+encodeURIComponent(itemId)+(startTicks!==undefined?'?startTicks='+startTicks:''));
   const revision=++state.revision;state.page='player';shell();content('<p class="loader">Preparing playback…</p>');
@@ -153,7 +161,7 @@ function navigate(page){
   recordRoute(page==='admin'?'admin/'+state.adminTab:page);
   state.revision++;state.page=page;shell();
   if(page==='home')home();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');
-  else if(page==='collections')library('BoxSet');else if(page==='favorites')showMyList();
+  else if(page==='collections')library('BoxSet');else if(page==='favorites')showMyList();else if(page==='requests')showRequests();else if(page==='streams')showStreams();
   else if(page==='account'){const revision=state.revision;renderAccount({api,cached,state,content,escapeHTML,onProfile:updateProfile,isCurrent:()=>revision===state.revision,onPlay:startPlayback,onItem:showItem,onInvalidate:()=>{invalidate();loadUserContext()}})}
   else if(getPage(page,state.user)){try{const dispose=getPage(page,state.user).mount({root:document.querySelector('#content'),api,user:{...state.user},escapeHTML,navigate,onItem:showItem,onPlay:startPlayback});disposePage=typeof dispose==='function'?dispose:()=>{}}catch(error){content(errorHTML(error))}}
   else if(page==='admin'&&state.user.admin){const revision=state.revision;import('./admin.js').then(({renderAdministration})=>{if(revision===state.revision)renderAdministration({state,api,escapeHTML,applyBranding,navigate})}).catch(error=>{if(revision===state.revision)content(errorHTML(error))})}
@@ -167,9 +175,10 @@ function restoreRoute(){
     if(parts[0]==='person'&&parts[1])return showPerson(parts[1]);
     if(parts[0]==='search')return search(parts[1]||'',Number(params.get('page')||1));
     if(parts[0]==='library'&&['Movie','Series','BoxSet','Movie,Series'].includes(parts[1])){state.revision++;state.page=parts[1]==='Movie'?'movies':parts[1]==='Series'?'shows':parts[1]==='BoxSet'||params.has('parent')?'collections':'favorites';shell();const options=Object.fromEntries(params);delete options.q;if(options.start)options.start=Number(options.start);return library(parts[1],params.get('q')||'',options)}
-    if(parts[0]==='favorites')return showMyList(Object.fromEntries(params));
+    if(parts[0]==='favorites')return params.get('source')==='requests'?showRequests({scope:'mine',filter:params.get('requestFilter')||'all'}):showMyList(Object.fromEntries(params));
+    if(parts[0]==='requests')return showRequests(Object.fromEntries(params));
     if(parts[0]==='admin'&&state.user.admin){state.adminTab=parts[1]||'general';return navigate('admin')}
-    if(['home','movies','shows','collections','favorites','account'].includes(parts[0])||getPage(parts[0],state.user))return navigate(parts[0]);
+    if(['home','movies','shows','collections','favorites','requests','streams','account'].includes(parts[0])||getPage(parts[0],state.user))return navigate(parts[0]);
   }catch{/* A malformed deep link returns to Home. */}
   navigate('home');
 }

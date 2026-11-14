@@ -5,6 +5,10 @@ const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 let savedState,parsedState={};
 export function profileOf(config,id){try{if(config.userState!==savedState){parsedState=JSON.parse(config.userState||'{}');savedState=config.userState}const direct=parsedState[id];if(direct)return direct.profile||{};const key=String(id||'').replaceAll('-','').toLowerCase();return Object.entries(parsedState).find(([candidate])=>candidate.replaceAll('-','').toLowerCase()===key)?.[1]?.profile||{}}catch{return {}}}
 export function profileName(config,id,fallback){return profileOf(config,id).displayName||fallback}
+export function featurePermissions(config,id,admin=false){
+  profileOf(config,id);const key=String(id||'').replaceAll('-','').toLowerCase(),state=parsedState[id]||Object.entries(parsedState).find(([candidate])=>candidate.replaceAll('-','').toLowerCase()===key)?.[1]||{},permissions=state.featurePermissions||{};
+  return {requests:admin||permissions.requests!==false,streams:admin||permissions.streams===true};
+}
 export function profileImage(bytes,{allowGif=false,maxBytes=2097152}={}){
   if(bytes.length>maxBytes)fail(413,'Profile picture is too large.');
   if(bytes.length>=33&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))&&bytes.toString('ascii',12,16)==='IHDR'){if(!bytes.readUInt32BE(16)||!bytes.readUInt32BE(20)||bytes.readUInt32BE(16)>4096||bytes.readUInt32BE(20)>4096)fail(400,'Profile image dimensions must be between 1 and 4096 pixels.');return 'image/png'}

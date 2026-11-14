@@ -1,4 +1,4 @@
-import {profileName} from './profiles.js';
+import {profileName,featurePermissions} from './profiles.js';
 import {managementIds,isManagementCollection} from './collection-visibility.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 export function libraryItem(item){
@@ -9,10 +9,21 @@ export function libraryItem(item){
   result.QualityTags=tags.slice(0,3);return result;
 }
 function stateOf(config,user){try{return JSON.parse(config.userState||'{}')[user]||{}}catch{return {}}}
+export function activeStream(session,config={}){
+  const item=session.NowPlayingItem||{},state=session.PlayState||{},transcode=session.TranscodingInfo,streams=item.MediaStreams||item.MediaSources?.[0]?.MediaStreams||[],video=streams.find(stream=>stream.Type==='Video')||{},audio=streams.find(stream=>stream.Type==='Audio')||{};
+  const number=value=>Number.isFinite(Number(value))&&Number(value)>0?Number(value):null,text=value=>String(value||'').slice(0,120);
+  const duration=number(item.RunTimeTicks),position=Math.max(0,Number(state.PositionTicks)||0),method=state.PlayMethod|| (transcode?'Transcode':'DirectPlay');
+  return {id:text(session.Id),itemId:/^[\w-]{1,100}$/.test(item.Id||'')?item.Id:null,title:text(item.Name)||'Untitled',series:text(item.SeriesName),year:item.ProductionYear||null,image:!!item.ImageTags?.Primary,user:profileName(config,session.UserId,text(session.UserName)||'Member'),client:text(session.Client),device:text(session.DeviceName),paused:state.IsPaused===true,positionSeconds:position/10000000,durationSeconds:duration?duration/10000000:null,progress:duration?Math.max(0,Math.min(100,position/duration*100)):null,method:method==='DirectPlay'?'Direct play':method==='DirectStream'?'Direct stream':'Transcoding',videoCodec:text(transcode?.VideoCodec||video.Codec),audioCodec:text(transcode?.AudioCodec||audio.Codec),sourceVideoCodec:text(video.Codec),sourceAudioCodec:text(audio.Codec),bitrate:number(transcode?.Bitrate||item.MediaSources?.[0]?.Bitrate),width:number(transcode?.Width||video.Width),height:number(transcode?.Height||video.Height),fps:number(transcode?.Framerate||video.RealFrameRate||video.AverageFrameRate),reasons:Array.isArray(transcode?.TranscodeReasons)?transcode.TranscodeReasons.slice(0,20).map(text):[]};
+}
 export function visibleItems(items,config,userId){const hidden=new Set(stateOf(config,userId).hiddenItems||[]);return items.filter(item=>!hidden.has(item.Id)&&!hidden.has(item.SeriesId)&&!hidden.has(item.libraryId))}
 export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig,getManagementCollections=async()=>managementIds(getConfig())}){
   return async(req,res,url,user)=>{
     const route=url.pathname;
+    if(route==='/api/active-streams'&&req.method==='GET'){
+      if(!featurePermissions(getConfig(),user.id,user.admin).streams)fail(403,'Active Streams are disabled for this account.');const sessions=await jf('Sessions',user),candidates=(Array.isArray(sessions)?sessions:[]).filter(session=>session.NowPlayingItem).slice(0,200),visible=[];
+      for(let index=0;index<candidates.length;index+=8){const batch=await Promise.all(candidates.slice(index,index+8).map(async session=>{if(user.admin)return session;try{await jf(`Users/${user.id}/Items/${cleanId(session.NowPlayingItem.Id)}`,user);return session}catch{return null}}));visible.push(...batch.filter(Boolean))}
+      json(res,200,{streams:visible.map(session=>activeStream(session,getConfig())),updated:new Date().toISOString()});return true;
+    }
     if(route==='/api/admin/management-collections'&&req.method==='GET'){
       if(!user.admin)fail(403,'Administrator required');const ids=await getManagementCollections();if(!ids.length){json(res,200,{Items:[]});return true}const q=new URLSearchParams({Ids:ids.join(','),Limit:'100',Recursive:'true'}),data=await jf(`Users/${user.id}/Items?${q}`,user);json(res,200,{Items:(data.Items||[]).filter(item=>isManagementCollection(item.Id,getConfig())).map(libraryItem)});return true;
     }
