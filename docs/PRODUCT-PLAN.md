@@ -25,7 +25,7 @@ Working requirements, updated 2026-11-14. Checkmarks require implementation plus
 
 ## Core web parity
 
-- [ ] Pagination, sorting, filters, library views, collections, favorites, watched toggles and Next Up.
+- [x] Pagination, sorting, filters, library views, collections, favorites, watched toggles and Next Up.
 - [ ] Rich local/catalog details, versions/extras, cast/person navigation, trailers where available and related titles.
 - [x] User profile/preferences and account security controls.
 - [ ] Administrator users, library controls/status, scheduled jobs, sessions, plugin inventory/configuration and service integrations.
@@ -65,3 +65,5 @@ Reference implementations were inspected to identify behavior, not copied as cla
 ## Release evidence
 
 The carousel refinement is commit `8b19a07`; its CI application/browser/clock/XML/container/publish jobs passed. Subsequent work must keep that behavior covered. Do not label the overall product finished until the unresolved parity and live verification gates are closed.
+
+Native playback and browsing commit `9224a88` passed [Linux API/browser/XML/build/container/publish validation](https://github.com/Arnas1111/JellyHub/actions/runs/43614062673). Automated playback used synthetic media and simulated Jellyfin; live-server and remaining parity gates remain open.

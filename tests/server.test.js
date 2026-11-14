@@ -84,6 +84,12 @@ test('startup, authentication, media permissions, integrations and persisted set
     assert.equal((await request('/api/login',{method:'POST',body:'x'.repeat(9000)})).status,413);
     assert.equal((await request('/api/login',{method:'POST',body:{username:'viewer',password:'wrong'}})).status,401);
   });
+  await t.test('static player assets negotiate compression and revalidate unchanged files',async()=>{
+    const plain=await request('/vendor/hls.min.mjs',{headers:{'Accept-Encoding':'identity'}}),source=await plain.text();assert.match(plain.headers.get('content-type'),/javascript/);const size=Number(plain.headers.get('content-length'));assert.ok(size>500000);
+    for(const encoding of ['br','gzip']){const compressed=await request('/vendor/hls.min.mjs',{headers:{'Accept-Encoding':encoding}});assert.equal(compressed.headers.get('content-encoding'),encoding);assert.ok(Number(compressed.headers.get('content-length'))<size/2);assert.equal(await compressed.text(),source);assert.equal(compressed.headers.get('vary'),'Accept-Encoding');assert.match(compressed.headers.get('content-security-policy'),/worker-src 'self' blob:/);const cached=await request('/vendor/hls.min.mjs',{headers:{'Accept-Encoding':encoding,'If-None-Match':compressed.headers.get('etag')}});assert.equal(cached.status,304);assert.equal(await cached.text(),'')}
+    const disabled=await request('/vendor/hls.min.mjs',{headers:{'Accept-Encoding':'br;q=0,gzip;q=0'}});assert.equal(disabled.headers.get('content-encoding'),null);assert.equal(await disabled.text(),source);
+    const head=await request('/vendor/hls.min.mjs',{method:'HEAD',headers:{'Accept-Encoding':'identity'}});assert.equal(Number(head.headers.get('content-length')),size);assert.equal(await head.text(),'');assert.match((await request('/extensions/manifest.json')).headers.get('content-type'),/application\/json/);
+  });
   const viewer=await login('viewer');const admin=await login('admin');
   await t.test('user-scoped media and administrator access checks',async()=>{
     for(const route of ['/api/home','/api/items?type=Movie','/api/views','/api/item/visible','/api/image/visible'])assert.equal((await request(route,{cookie:viewer})).status,200,route);

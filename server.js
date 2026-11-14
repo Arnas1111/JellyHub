@@ -1,3 +1,4 @@
+import {createStaticAssets} from './static-assets.js';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -117,7 +118,7 @@ async function maintainerrIndex(){
 const sessions = new Map(); // V0.1 single-instance memory; restart clears sessions
 const attempts = new Map();
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
-const mime = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml' };
+const staticAssets=createStaticAssets();
 const MAX_BODY=8192;
 const json = (res,status,data,headers={}) => send(res,status,JSON.stringify(data),{'Content-Type':'application/json; charset=utf-8',...headers});
 function send(res,status,body,headers={}) { res.writeHead(status,{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',...headers});res.end(body); }
@@ -339,9 +340,7 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
     const name=url.pathname==='/'?'index.html':url.pathname.replace(/^\//,'');
     const file=path.resolve(publicDir,name);
     if(!file.startsWith(publicDir))return send(res,403,'Forbidden');
-    let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
-    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
-    res.end(body);
+    if(!await staticAssets(req,res,file))return send(res,404,'Not found');
   }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});if(res.headersSent){res.destroy();return}json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
 }));
 server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
