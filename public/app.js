@@ -1,3 +1,5 @@
+import {availabilityBadge} from './availability.js';
+import {clearFeaturedSnapshots} from './featured-cache.js';
 import {loadExtensions,pagesFor,getPage} from './extensions.js';
 import { mountCarousel, carouselPlaceholder, renderDetail, mountDetailPreview } from './cinema.js';
 import { renderLibrary } from './library.js';
@@ -12,7 +14,7 @@ const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 async function api(url,opts={}){
   const response=await fetch(url,{credentials:'same-origin',...opts,headers:{'Content-Type':'application/json',...opts.headers}});
   const data=await response.json().catch(()=>({}));
-  if(!response.ok)throw Error((data.error||'Request failed')+(data.requestId?' [Request '+data.requestId+']':''));
+  if(!response.ok)throw Object.assign(Error((data.error||'Request failed')+(data.requestId?' [Request '+data.requestId+']':'')),{status:response.status});
   return data;
 }
 const pending=new Map();let cacheEpoch=0;
@@ -39,7 +41,7 @@ function shell(){
 }
 function login(message=''){
   releasePage();
-  state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
+  clearFeaturedSnapshots();state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
   root.innerHTML=`<div class="login"><section class="login-card">${brandMarkup()}<h1>Welcome back.</h1><p>Use your existing Jellyfin account.</p><form id="login"><input class="input" name="username" autocomplete="username" placeholder="Username" required/><input class="input" name="password" type="password" autocomplete="current-password" placeholder="Password" required/><button class="primary">Sign in</button><div class="error" id="login-error">${escapeHTML(message)}</div></form></section></div>`;
   document.querySelector('#login').onsubmit=async event=>{
     event.preventDefault();const fields=new FormData(event.currentTarget),btn=event.currentTarget.querySelector('button');btn.disabled=true;
@@ -58,11 +60,11 @@ function mediaTile(item){
   if(state.preferences?.spoilerGuard&&item.Type==='Episode'&&!item.UserData?.Played)item={...item,Name:'Episode '+(item.IndexNumber||''),ImageTags:{}};
   const progress=item.RunTimeTicks?Math.min(100,Math.max(0,Number(item.UserData?.PlaybackPositionTicks||0)/item.RunTimeTicks*100)):0;
   state.items??=new Map();if(state.items.size>=1000)state.items.delete(state.items.keys().next().value);state.items.set(item.Id,item);
-  const title=escapeHTML(item.Name||'Unknown');return `<article class="tile-card"><button class="tile" data-item="${escapeHTML(item.Id)}"><div class="poster">${item.ImageTags?.Primary?`<img loading="lazy" src="/api/image/${encodeURIComponent(item.Id)}" alt=""/>`:title.slice(0,1)}<span class="removal-overlay" data-removal-id="${escapeHTML(item.Id)}">${removalBadge(item.Id)}</span>${progress?`<progress class="watch-progress" value="${progress}" max="100" aria-label="Watch progress"></progress>`:''}</div><div class="tile-info"><div class="title">${title}</div><div class="sub">${escapeHTML(item.SeriesName||item.ProductionYear||item.Type||'')}</div>${state.preferences?.qualityTags!==false&&(item.QualityTags||[]).length?`<div class="quality-tags">${item.QualityTags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div>`:''}</div></button><button class="tile-menu" data-actions="${escapeHTML(item.Id)}" aria-label="Actions for ${title}" title="Title actions">•••</button></article>`;
+  const title=escapeHTML(item.Name||'Unknown');return `<article class="tile-card"><button class="tile" data-item="${escapeHTML(item.Id)}"><div class="poster">${item.ImageTags?.Primary?`<img loading="lazy" src="/api/image/${encodeURIComponent(item.Id)}" alt=""/>`:title.slice(0,1)}<span class="removal-overlay" data-removal-id="${escapeHTML(item.Id)}">${removalBadge(item.Id)}</span>${progress?`<progress class="watch-progress" value="${progress}" max="100" aria-label="Watch progress"></progress>`:''}</div><div class="tile-info"><div class="title">${title}</div><div class="sub">${escapeHTML(item.SeriesName||item.ProductionYear||item.Type||'')}</div>${state.preferences?.qualityTags!==false&&(item.QualityTags||[]).length?`<div class="quality-tags">${item.QualityTags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div>`:''}${availabilityBadge('library')}</div></button><button class="tile-menu" data-actions="${escapeHTML(item.Id)}" aria-label="Actions for ${title}" title="Title actions">•••</button></article>`;
 }
 function catalogTile(item){
-  const label=item.libraryId?'In your library':[2,3].includes(item.status)?'Requested':item.status===5?'Managed by Seerr':'Discover';
-  return `<button class="tile" data-catalog-type="${item.mediaType}" data-catalog-id="${item.id}" ${item.libraryId?`data-item="${escapeHTML(item.libraryId)}"`:''}><div class="poster">${item.posterPath?`<img loading="lazy" src="/api/catalog/image?path=${encodeURIComponent(item.posterPath)}" alt=""/>`:escapeHTML(item.title).slice(0,1)}</div><div class="tile-info"><div class="title">${escapeHTML(item.title)}</div><div class="sub">${escapeHTML(item.year)} · ${item.mediaType==='movie'?'Movie':'TV'}</div><span class="availability">${label}</span></div></button>`;
+  const kind=item.libraryId?'library':[2,3].includes(item.status)?'requested':item.status===5?'managed':'discover';
+  return `<button class="tile" data-catalog-type="${item.mediaType}" data-catalog-id="${item.id}" ${item.libraryId?`data-item="${escapeHTML(item.libraryId)}"`:''}><div class="poster">${item.posterPath?`<img loading="lazy" src="/api/catalog/image?path=${encodeURIComponent(item.posterPath)}" alt=""/>`:escapeHTML(item.title).slice(0,1)}</div><div class="tile-info"><div class="title">${escapeHTML(item.title)}</div><div class="sub">${escapeHTML(item.year)} · ${item.mediaType==='movie'?'Movie':'TV'}</div>${availabilityBadge(kind)}</div></button>`;
 }
 let prefetchCount=0;
 function bindTiles(){
@@ -82,7 +84,7 @@ function recordRoute(route){if(location.hash.slice(1)!==route)history.pushState(
 async function home(){
   const revision=state.revision;
   content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1><p class="muted">Your library and your next request, in one place.</p>${searchForm('')}</div><div id="featured">${carouselPlaceholder()}</div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="next-up"></div><div id="rows"><p class="loader">Loading your library…</p></div>`);bindSearch();
-  disposePage=mountCarousel({root:document.querySelector('#featured'),api,isCurrent:()=>revision===state.revision,onSelect:showItem,escapeHTML});
+  disposePage=mountCarousel({root:document.querySelector('#featured'),api,isCurrent:()=>revision===state.revision,onSelect:showItem,escapeHTML,cacheKey:state.user.id});
   await Promise.all([
     (async()=>{try{const data=await cached('/api/next-up',15000);if(revision!==state.revision)return;document.querySelector('#next-up').innerHTML=section('Next up',data.Items);bindTiles();loadRemovals()}catch{/* Optional row; other home data remains available. */}})(),
     (async()=>{try{const data=await cached('/api/home');if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=section('Continue watching',data.resume)+section('Recently added',data.recent)+(data.errors?.length?`<p class="error">${escapeHTML(data.errors.join('; '))}</p>`:'');bindTiles();loadRemovals()}catch(error){if(revision===state.revision)document.querySelector('#rows').innerHTML=errorHTML(error)}})(),
