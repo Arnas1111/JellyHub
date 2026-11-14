@@ -25,7 +25,8 @@ try{
     const finished=new Promise(resolve=>{recorder.ondataavailable=event=>chunks.push(event.data);recorder.onstop=async()=>{stream.getTracks().forEach(track=>track.stop());resolve(Array.from(new Uint8Array(await new Blob(chunks).arrayBuffer())))}});
     recorder.start();let frame=0;const timer=setInterval(()=>{context.fillStyle=frame++%2?'#26475e':'#304961';context.fillRect(0,0,160,90)},80);setTimeout(()=>{clearInterval(timer);recorder.stop()},1200);return finished;
   }));
-  let user=null,testPayload,failedSave=false,level='info',requestPayload,policyPayload,iconUploaded=false;
+  let user=null,testPayload,failedSave=false,level='info',requestPayload,policyPayload,iconUploaded=false,releaseFeatured;
+  const featuredReady=new Promise(resolve=>releaseFeatured=resolve);
   let branding={title:'JellyHub',name:'jellyhub.',welcome:'Discover your next favorite.',accent:'#9980ff',favicon:'/favicon.ico',logo:'/branding-logo'};
   const libraryItem={Id:'visible',Name:'Test Movie',Type:'Movie',ImageTags:{Primary:'tag'},RunTimeTicks:90000000000,UserData:{PlaybackPositionTicks:18000000000},ProductionYear:2026,Genres:['Adventure','Drama'],OfficialRating:'PG-13',CommunityRating:8.1,Overview:'A cinematic journey across an unfamiliar world.'};
   const seriesItem={Id:'series',Name:'Test Series',Type:'Series',ImageTags:{Primary:'tag'},Overview:'An unfolding story.',ProductionYear:2026};
@@ -42,7 +43,7 @@ try{
     if(url.pathname==='/api/me')return reply(user||{error:'Not authenticated'},user?200:401);
     if(url.pathname==='/api/logout'){user=null;return reply({ok:true})}
     if(url.pathname==='/api/home')return reply({recent:[libraryItem],resume:[]});
-    if(url.pathname==='/api/featured')return reply({items:[libraryItem,seriesItem],source:'popular',reshuffleAt:Math.floor(Date.now()/3600000)*3600000+3600000});
+    if(url.pathname==='/api/featured'){await featuredReady;return reply({items:[libraryItem,seriesItem,...Array.from({length:6},(_,index)=>({...libraryItem,Id:'featured'+index,Name:'Featured Movie '+(index+3)}))],source:'popular',reshuffleAt:Math.floor(Date.now()/3600000)*3600000+3600000})}
     if(url.pathname.startsWith('/api/preview/'))return reply({playable:true,url:'/api/preview-stream/test-clip',startSeconds:0,clipSeconds:20,container:'webm'});
     if(url.pathname==='/api/preview-stream/test-clip')return route.fulfill({status:200,contentType:'video/webm',body:clip});
     if(url.pathname.startsWith('/api/backdrop/'))return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><defs><linearGradient id="g"><stop stop-color="#19354c"/><stop offset="1" stop-color="#7b4b5f"/></linearGradient></defs><path fill="url(#g)" d="M0 0h1920v1080H0z"/></svg>'});
@@ -80,16 +81,28 @@ try{
   const adminTab=async name=>{await page.getByRole('button',{name,exact:true}).click();await page.locator('#admin-content h2').getByText(name==='Users'?'Jellyfin users':name,{exact:true}).waitFor()};
   async function login(name){await page.getByPlaceholder('Username',{exact:true}).fill(name);await page.getByPlaceholder('Password',{exact:true}).fill('secret');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('heading',{name:branding.welcome}).waitFor()}
   await page.goto(base);await login('admin');
+  const reserved=await page.locator('.featured').boundingBox();const belowBefore=await page.locator('#discovery').boundingBox();
+  assert.equal(reserved.height,480);assert.ok(await page.locator('.featured.is-loading').isVisible());releaseFeatured();
+  await page.locator('.feature-slide').waitFor();
+  assert.equal((await page.locator('.featured').boundingBox()).height,reserved.height);assert.ok(Math.abs((await page.locator('#discovery').boundingBox()).y-belowBefore.y)<1,'Featured content must not shift the following row');
   assert.equal(await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Search',exact:true}).count(),0);
+  assert.equal(await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Music',exact:true}).count(),0);
+  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Movies',exact:true}).hover();assert.equal(await page.locator('[data-nav="movies"]').evaluate(el=>getComputedStyle(el).color),'rgb(255, 194, 48)');
+  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'TV Shows',exact:true}).hover();assert.equal(await page.locator('[data-nav="shows"]').evaluate(el=>getComputedStyle(el).color),'rgb(76, 200, 242)');await page.mouse.move(0,0);
   assert.ok(await page.locator('.brand-mark').isVisible());
   const iconResponse=await page.request.get(base+'/favicon.ico');
   assert.equal(iconResponse.status(),200);
   assert.ok(await page.locator('.brand-mark').evaluate(async image=>{try{await image.decode();return image.naturalWidth>0}catch{return false}}),'Sidebar brand image must decode: '+await iconResponse.text());
   await page.waitForFunction(()=>document.querySelector('.feature-video')?.currentTime>.1);
   assert.ok(await page.locator('.feature-video').evaluate(video=>video.muted&&video.videoWidth>0),'Generated WebM must decode as a muted preview');
-  await page.getByRole('button',{name:'Pause carousel',exact:true}).click();assert.equal(await page.locator('.feature-video').getAttribute('src'),null);
-  await page.getByRole('button',{name:'Next featured title',exact:true}).click();await page.getByRole('heading',{name:'Test Series',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Previous featured title',exact:true}).click();
+  assert.equal(await page.locator('.carousel-dot').count(),8);assert.equal(await page.locator('.carousel-dot[aria-current="true"]').count(),1);assert.equal(await page.locator('.featured').evaluate(el=>getComputedStyle(el).borderRadius),'0px');
+  assert.equal(await page.getByText('Artwork preview',{exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Pause carousel',exact:true}).count(),0);
+  await page.locator('.featured').hover();assert.ok(await page.locator('.feature-video').evaluate(video=>video.paused));
+  const frozen=await page.locator('.feature-progress').getAttribute('aria-valuenow');await page.waitForTimeout(250);assert.equal(await page.locator('.feature-progress').getAttribute('aria-valuenow'),frozen);await page.mouse.move(0,0);
+  await page.getByRole('button',{name:'Show featured title 2: Test Series',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.feature-track').getAnimations().some(animation=>animation.playState==='running'));
+  await page.waitForFunction(()=>document.querySelector('.feature-track').children.length===1);await page.getByRole('heading',{name:'Test Series',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Show featured title 1: Test Movie',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.feature-track').children.length===1);await page.mouse.move(0,0);
   assert.equal(await page.getByText('Your media universe',{exact:false}).count(),0);
   await page.getByRole('heading',{name:'Popular movies'}).waitFor();
   if(process.env.SCREENSHOT_PATH)await page.screenshot({path:process.env.SCREENSHOT_PATH.replace('.png','-home.png'),fullPage:true});
@@ -102,7 +115,7 @@ try{
   await page.getByRole('button',{name:'Watch preview',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.detail-preview-player')?.currentTime>.1);
   await page.getByRole('button',{name:'Movies',exact:true}).click();await page.locator('#continue-row').getByRole('heading',{name:'Continue watching'}).waitFor();assert.equal(await page.locator('#continue-row progress').count(),1);
   await page.getByRole('button',{name:'TV Shows',exact:true}).click();await page.locator('#continue-row [data-item="episode1"]').waitFor();
-  await page.getByRole('button',{name:'Home',exact:true}).click();await page.getByRole('button',{name:'Next featured title',exact:true}).click();await page.getByRole('button',{name:'More information',exact:true}).click();await page.getByRole('heading',{name:'Episodes',exact:true}).waitFor();await page.locator('#season-picker').selectOption('season2');await page.getByRole('heading',{name:'1. Second season premiere',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Home',exact:true}).click();await page.getByRole('button',{name:'Show featured title 2: Test Series',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.feature-track').children.length===1);await page.getByRole('button',{name:'More information',exact:true}).click();await page.getByRole('heading',{name:'Episodes',exact:true}).waitFor();await page.locator('#season-picker').selectOption('season2');await page.getByRole('heading',{name:'1. Second season premiere',exact:true}).waitFor();
   await page.getByRole('button',{name:'Administration',exact:true}).click();await adminTab('Sonarr');
   assert.equal(await page.locator('.nav').getByRole('button',{name:'Connections'}).count(),0);
   assert.equal(await page.locator('.admin-tabs').evaluate(el=>getComputedStyle(el).display),'flex');
@@ -122,7 +135,7 @@ try{
   await page.getByRole('button',{name:'Home',exact:true}).click();await page.locator('#universal-query').fill('Movie');await page.locator('#universal-search').getByRole('button',{name:'Search',exact:true}).click();await page.getByRole('heading',{name:'Discover & request'}).waitFor();await page.locator('[data-catalog-id="200"]').click();await page.getByRole('button',{name:'Request movie',exact:true}).click();await page.getByText('Request submitted for approval.',{exact:true}).waitFor();assert.deepEqual(requestPayload,{mediaType:'movie',mediaId:200});
   await page.getByRole('button',{name:'Home',exact:true}).first().click();await page.locator('[data-catalog-id="300"]').click();await page.getByLabel('Season 1',{exact:true}).check();await page.getByRole('button',{name:'Request selected seasons'}).click();await page.getByText('Request submitted for approval.',{exact:true}).waitFor();assert.deepEqual(requestPayload.seasons,[1]);
   await page.getByRole('button',{name:'Sign out',exact:false}).click();await login('viewer');assert.equal(await page.getByRole('button',{name:'Administration',exact:true}).count(),0);
-  await page.emulateMedia({reducedMotion:'reduce'});await page.getByRole('button',{name:'Play carousel',exact:true}).waitFor();assert.equal(await page.locator('.feature-video').getAttribute('src'),null);
+  await page.emulateMedia({reducedMotion:'reduce'});await page.waitForFunction(()=>!document.querySelector('.feature-video')?.getAttribute('src'));assert.equal(await page.locator('.feature-video').getAttribute('src'),null);
   assert.deepEqual(errors,[]);
-  console.log('Browser checks passed: decoded muted carousel video, pause/next/previous and reduced-motion behavior; logo upload; movie/show Continue Watching; richer details and season switching; Home search, requests, admin settings and mobile layout. APIs mocked; video generated locally.');
+  console.log('Browser checks passed: stable carousel loading, eight dots, animated slide, hover pause, decoded video and reduced motion; Music removal and service-colored hovers; existing branding, details, request and admin flows. APIs mocked; video generated locally.');
 }finally{await browser?.close();if(child.exitCode===null){const exit=once(child,'exit');child.kill();await exit}await rm(dir,{recursive:true,force:true})}

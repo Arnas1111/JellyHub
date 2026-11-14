@@ -158,10 +158,17 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
         items=(await libraryMatches(session,wanted.map(item=>item.id))).filter(item=>wanted.some(w=>w.id===String(item.ProviderIds?.Tmdb)&&w.type===item.Type));
         if(items.length)source='popular';
       }catch{/* An unconfigured/unavailable Seerr must not prevent the library carousel. */}
-      if(!items.length){const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'CommunityRating',SortOrder:'Descending',Limit:'30',Fields:'Overview,Genres,ProductionYear,CommunityRating'});items=(await jf(`Users/${session.id}/Items?${q}`,session)).Items||[]}
+      items=[...new Map(items.map(item=>[item.Id,item])).values()];
+      let fillers=[];
+      if(items.length<8){
+        const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'CommunityRating',SortOrder:'Descending',Limit:'30',Fields:'Overview,Genres,ProductionYear,CommunityRating'});
+        try{fillers=(await jf(`Users/${session.id}/Items?${q}`,session)).Items||[]}catch(error){if(!items.length)throw error}
+      }
       const hour=Math.floor(Date.now()/3600000);
       const score=item=>crypto.createHash('sha256').update(`${session.id}:${hour}:${item.Id}`).digest('hex');
-      const selected=[...new Map(items.map(item=>[item.Id,item])).values()].sort((a,b)=>score(a).localeCompare(score(b))).slice(0,6);
+      const selected=items.sort((a,b)=>score(a).localeCompare(score(b))).slice(0,8),seen=new Set(selected.map(item=>item.Id));
+      for(const item of fillers.sort((a,b)=>score(a).localeCompare(score(b)))){if(selected.length>=8)break;if(!seen.has(item.Id)){selected.push(item);seen.add(item.Id);if(source==='popular')source='mixed'}}
+      selected.sort((a,b)=>score(a).localeCompare(score(b)));
       const publicItems=selected.map(item=>Object.fromEntries(['Id','Name','Type','Overview','ProductionYear','OfficialRating','CommunityRating','RunTimeTicks','Genres','ImageTags','BackdropImageTags'].filter(key=>item[key]!==undefined).map(key=>[key,item[key]])));
       json(res,200,{items:publicItems,source,reshuffleAt:(hour+1)*3600000});return true;
     }

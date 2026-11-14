@@ -23,7 +23,7 @@ Other fixes: static assets resolve relative to the server file instead of the sh
 | Maintainerr card/detail countdowns | Browser detail test; HTTP date arithmetic, cache, inactive collection and user item filtering tests | Existing overlay API/action assumptions require live validation |
 | Unraid XML | XML contract check in CI; local PowerShell parsing | No install on the user's Unraid server |
 
-Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 19 Node checks; 18 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks and a generated WebM video. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 20 Node checks; 19 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks and a generated WebM video. A separate browser-clock suite verifies carousel timing. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
 
 The Connections update tests current form fields without saving, distinguishes missing keys from rejected keys, normalizes key whitespace, supports service URL bases, aligns clear-key controls and colors results. Structured, configurable logging includes safe endpoint/status/timing diagnostics and request IDs while excluding credentials and response bodies. Tests cover 401s, missing keys, non-JSON login pages, redirects, network failures, log filtering, persistence, and failed-save input preservation. Corrupt JSON startup errors omit file contents.
 
@@ -48,6 +48,14 @@ Home has an hourly-shuffled carousel from accessible popular library matches, wi
 Server tests verify hourly selection, library filtering, details/episode queries, forbidden items, playback-policy checks, range forwarding, short-lived session-bound preview tickets and token/file-path redaction. Browser tests generate a small WebM with MediaRecorder and verify actual decoding/current-time advance, carousel controls, detail previews, season changes and logo upload. These are contract/UI tests, not live media-server validation.
 
 Preview support is deliberately limited to compatible direct-play MP4/M4V (H.264/AAC or MP3) and WebM (VP8/VP9 with Opus/Vorbis), SDR up to 8-bit and 20 Mbps. Other files use artwork. Preview requests disable transcoding/remuxing/live-stream opening and do not send watch-progress reports. No claim is made that arbitrary Jellyfin files will preview successfully.
+
+## Carousel interaction refinement
+
+The featured pool now contains up to eight unique titles, retaining accessible popular matches and filling spare places from the user's top-rated library. Music navigation is removed. Movies and TV Shows have gold and blue hover colors respectively.
+
+The carousel uses a fixed-height stage in its initial markup, with stable loading/empty/error states. Frameless artwork fades into the surrounding page. The previous arrow/pause buttons, numerical counter and preview captions are removed. Custom dot controls show the active title. A bottom progress line tracks a 20-second interval, pausing alongside the video on mouse hover and resuming from the same point. The image, video and title content move together in a horizontal transition. Reduced-motion uses instant changes and disables automatic video.
+
+Browser tests hold the featured API response to check that loading causes no layout shift, exercise all eight dots and an animated transition, verify actual video hover-pause, navigation removal/colors and generated-video decoding. The controlled-clock test advances time through 20 seconds, a 40-second hover pause and the remaining interval, and checks progress reset and stable failure geometry. Detail-view behavior is unchanged in this refinement.
 
 ## Still incomplete
 

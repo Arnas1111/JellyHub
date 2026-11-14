@@ -5,9 +5,9 @@
     "type":  "module",
     "scripts":  {
                     "start":  "node server.js",
-                    "check":  "node --check server.js && node --check features.js && node --check media.js && node --check diagnostics.js && node --check public/app.js && node --check public/admin.js && node --check public/cinema.js",
+                    "check":  "node --check server.js && node --check features.js && node --check media.js && node --check diagnostics.js && node --check public/app.js && node --check public/admin.js && node --check public/cinema.js && node --check public/carousel.js",
                     "test":  "node --test",
-                    "test:browser":  "node tests/browser.mjs"
+                    "test:browser":  "node tests/browser.mjs && node tests/carousel.mjs"
                 },
     "engines":  {
                     "node":  ">=22"

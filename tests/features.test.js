@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFeatures, brandingDefaults } from '../features.js';
 
-function fixture(){
+function fixture(libraryItems){
   const config={...brandingDefaults,seerrKey:'private-key',seerrUrl:'http://seerr:5055'};
   const users=[{Id:'admin',Name:'Admin',Configuration:{AudioLanguagePreference:'de'},Policy:{IsAdministrator:true,IsDisabled:false,EnableAllFolders:true,EnabledFolders:[],EnableContentDeletion:false}},{Id:'viewer',Name:'Viewer',Configuration:{AudioLanguagePreference:'en'},Policy:{IsAdministrator:false,EnableAllFolders:false,EnabledFolders:['movies'],EnableContentDeletion:false,CustomUntouchedField:17}}];
   const calls=[];let permissions=32,unmapped=false,ignoreIdentity=false,discoveryFails=false,quotaFails=false;
-  const library=[{Id:'visible',Name:'Library Movie',Type:'Movie',ProviderIds:{Tmdb:'100'}}];
+  const library=libraryItems||[{Id:'visible',Name:'Library Movie',Type:'Movie',ProviderIds:{Tmdb:'100'}}];
   const jf=async(route,session,opts={})=>{
     calls.push({service:'jf',route,session:session.id,...opts});
     if(route==='Users')return structuredClone(users);
@@ -77,6 +77,15 @@ test('discovery and media details use verified Seerr identity; TV season state i
 test('featured titles are accessible library matches and stay stable within an hourly shuffle window',async()=>{
   const f=fixture();const first=await f.run('/api/featured'),second=await f.run('/api/featured');assert.deepEqual(first.data.items,second.data.items);assert.equal(first.data.items[0].Id,'visible');assert.equal(first.data.reshuffleAt%3600000,0);assert.equal(first.data.source,'popular');
   f.set({discoveryFails:true});const fallback=await f.run('/api/featured');assert.equal(fallback.data.source,'library');assert.equal(fallback.data.items[0].Id,'visible');
+});
+
+test('featured selection returns at most eight distinct titles and omits private source fields',async()=>{
+  const items=Array.from({length:12},(_,index)=>({Id:'movie'+index,Name:'Movie '+index,Type:'Movie',Path:'/private/video.mp4'}));
+  const f=fixture(items);f.set({discoveryFails:true});const result=await f.run('/api/featured');
+  assert.equal(result.data.items.length,8);assert.equal(new Set(result.data.items.map(item=>item.Id)).size,8);assert.doesNotMatch(JSON.stringify(result.data),/private|Path/);
+  assert.ok(result.data.items.every(item=>items.some(source=>source.Id===item.Id)));
+  const mixed=fixture([{Id:'popular',Name:'Popular Movie',Type:'Movie',ProviderIds:{Tmdb:'100'}},...items]);
+  const filled=await mixed.run('/api/featured');assert.equal(filled.data.items.length,8);assert.ok(filled.data.items.some(item=>item.Id==='popular'),'Keep accessible popular titles while filling remaining places from the library');assert.equal(filled.data.source,'mixed');
 });
 
 test('movie and season requests enforce actor permissions and upstream quota decisions',async()=>{

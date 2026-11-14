@@ -1,4 +1,4 @@
-import { mountCarousel, renderDetail, mountDetailPreview } from './cinema.js';
+import { mountCarousel, carouselPlaceholder, renderDetail, mountDetailPreview } from './cinema.js';
 import { renderAdministration } from './admin.js';
 
 const root=document.querySelector('#app');
@@ -26,7 +26,7 @@ function applyBranding(value){
 }
 function shell(){
   releasePage();
-  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['music','Music'],...(state.user.admin?[['admin','Administration']]:[])];
+  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],...(state.user.admin?[['admin','Administration']]:[])];
   root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" class="${id===state.page?'active':''}">${label}</button>`).join('')}</nav></aside><main class="main"><header class="top"><div class="topright"><span class="pill">${escapeHTML(state.user.name)}</span><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
   document.querySelectorAll('[data-nav]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.nav));
   document.querySelector('#logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{state.revision++;login()}};
@@ -65,7 +65,7 @@ const searchForm=query=>`<form id="universal-search" class="universal-search" ro
 function bindSearch(){document.querySelector('#universal-search').onsubmit=event=>{event.preventDefault();search(new FormData(event.currentTarget).get('q'))}}
 async function home(){
   const revision=state.revision;
-  content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1><p class="muted">Your library and your next request, in one place.</p>${searchForm('')}</div><div id="featured"><p class="loader">Loading featured titles…</p></div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="rows"><p class="loader">Loading your library…</p></div>`);bindSearch();
+  content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1><p class="muted">Your library and your next request, in one place.</p>${searchForm('')}</div><div id="featured">${carouselPlaceholder()}</div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="rows"><p class="loader">Loading your library…</p></div>`);bindSearch();
   disposePage=mountCarousel({root:document.querySelector('#featured'),api,isCurrent:()=>revision===state.revision,onSelect:showItem,escapeHTML});
   await Promise.all([
     (async()=>{try{const data=await cached('/api/home');if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=section('Continue watching',data.resume)+section('Recently added',data.recent)+(data.errors?.length?`<p class="error">${escapeHTML(data.errors.join('; '))}</p>`:'');bindTiles();loadRemovals()}catch(error){if(revision===state.revision)document.querySelector('#rows').innerHTML=errorHTML(error)}})(),
@@ -112,7 +112,7 @@ async function showCatalog(type,id){
 }
 function navigate(page){
   state.revision++;state.page=page;shell();
-  if(page==='home')home();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');else if(page==='music')library('Audio');
+  if(page==='home')home();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');
   else if(page==='admin'&&state.user.admin)renderAdministration({state,api,escapeHTML,applyBranding,navigate});
 }
 (async()=>{

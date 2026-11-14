@@ -20,6 +20,7 @@ curl --fail http://127.0.0.1:3100/ | grep 'id="app"'
 curl --fail http://127.0.0.1:3100/app.js > /dev/null
 curl --fail http://127.0.0.1:3100/admin.js > /dev/null
 curl --fail http://127.0.0.1:3100/cinema.js > /dev/null
+curl --fail http://127.0.0.1:3100/carousel.js > /dev/null
 curl --fail http://127.0.0.1:3100/styles.css > /dev/null
 curl --fail http://127.0.0.1:3100/api/branding
 curl --fail http://127.0.0.1:3100/favicon.ico > /dev/null
