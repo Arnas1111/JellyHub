@@ -7,9 +7,13 @@ export function libraryItem(item){
   result.QualityTags=tags.slice(0,3);return result;
 }
 function stateOf(config,user){try{return JSON.parse(config.userState||'{}')[user]||{}}catch{return {}}}
+export function visibleItems(items,config,userId){const hidden=new Set(stateOf(config,userId).hiddenItems||[]);return items.filter(item=>!hidden.has(item.Id)&&!hidden.has(item.SeriesId)&&!hidden.has(item.libraryId))}
 export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig}){
   return async(req,res,url,user)=>{
     const route=url.pathname;
+    if(route==='/api/library-views'&&req.method==='GET'){
+      const data=await jf(`Users/${user.id}/Views`,user);json(res,200,{views:(data.Items||[]).filter(item=>!['music','musicvideos','books','audiobooks','photos'].includes(item.CollectionType)).map(item=>({id:item.Id,name:item.Name,type:item.CollectionType||'mixed'}))});return true;
+    }
     if(route==='/api/browse'&&req.method==='GET'){
       const type=url.searchParams.get('type')||'Movie';if(!['Movie','Series','BoxSet','Movie,Series'].includes(type))fail(400,'Invalid library type');
       const start=Number(url.searchParams.get('start')||0),limit=Number(url.searchParams.get('limit')||60);if(!Number.isSafeInteger(start)||start<0||start>500000||!Number.isSafeInteger(limit)||limit<1||limit>100)fail(400,'Invalid page');
@@ -30,7 +34,7 @@ export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig}){
       json(res,200,{genres:(data.Genres||[]).map(g=>typeof g==='string'?g:g.Name).filter(Boolean),years:data.Years||[]});return true;
     }
     if(route==='/api/next-up'&&req.method==='GET'){
-      const q=new URLSearchParams({UserId:user.id,Limit:'24',Fields:'Overview,MediaSources',EnableUserData:'true'});const data=await jf('Shows/NextUp?'+q,user);json(res,200,{Items:(data.Items||[]).map(libraryItem)});return true;
+      const q=new URLSearchParams({UserId:user.id,Limit:'24',Fields:'Overview,MediaSources',EnableUserData:'true'});const data=await jf('Shows/NextUp?'+q,user);json(res,200,{Items:visibleItems(data.Items||[],getConfig(),user.id).map(libraryItem)});return true;
     }
     if(route==='/api/account'&&req.method==='GET'){
       const me=await jf('Users/Me',user);json(res,200,{id:me.Id,name:me.Name,hasPassword:me.HasPassword,configuration:{AudioLanguagePreference:me.Configuration?.AudioLanguagePreference||'',SubtitleLanguagePreference:me.Configuration?.SubtitleLanguagePreference||'',SubtitleMode:me.Configuration?.SubtitleMode||'Default'},canEdit:me.Policy?.EnableUserPreferenceAccess!==false});return true;

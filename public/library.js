@@ -6,7 +6,7 @@ export async function renderLibrary(ctx,type,query='',options={}){
   if(options.parent)document.querySelector('#collection-back').onclick=()=>ctx.collections();
   const form=document.querySelector('#library-filter');
   form.onsubmit=event=>{event.preventDefault();const fields=Object.fromEntries(new FormData(form));ctx.reload(type,fields.q,{...options,...fields,start:0})};
-  const params=new URLSearchParams({type,q:query,start:String(page),limit:String(limit),sort:options.sort||'SortName',order:options.order||'asc',...(options.filter?{filter:options.filter}:{}),...(options.parent?{parent:options.parent}:{}),...(options.person?{person:options.person}:{}),...(options.genre?{genre:options.genre}:{}),...(options.year?{year:String(options.year)}:{})});
+  const params=new URLSearchParams({type,q:query,start:String(page),limit:String(limit),sort:options.sort||'SortName',order:options.order||'asc',...(options.filter?{filter:options.filter}:{}),...(options.parent||options.library?{parent:options.parent||options.library}:{}),...(options.person?{person:options.person}:{}),...(options.genre?{genre:options.genre}:{}),...(options.year?{year:String(options.year)}:{})});
   const work=[(async()=>{
     try{
       const result=await cached('/api/browse?'+params);if(!isCurrent())return;
@@ -19,6 +19,7 @@ export async function renderLibrary(ctx,type,query='',options={}){
   if(['Movie','Series'].includes(type)&&!options.parent){
     work.push((async()=>{try{const result=await cached('/api/continue?type='+type,15000);if(!isCurrent())return;document.querySelector('#continue-row').innerHTML=section('Continue watching',result.Items);bindTiles();loadRemovals()}catch(error){if(isCurrent())document.querySelector('#continue-row').innerHTML=`<p class="error">${e(error.message)}</p>`}})());
     work.push((async()=>{try{const filters=await cached('/api/library-filters?type='+type,300000);if(!isCurrent())return;for(const [name,values]of [['genre',filters.genres],['year',filters.years]]){const select=form.querySelector(`[name="${name}"]`);for(const value of values){const option=document.createElement('option');option.value=value;option.textContent=value;option.selected=String(value)===String(options[name]);select.append(option)}}}catch{/* Browsing remains available without filter metadata. */}})());
+    work.push((async()=>{try{const data=await cached('/api/library-views',300000);if(!isCurrent())return;const select=document.createElement('select');select.className='input';select.name='library';select.setAttribute('aria-label','Library');select.append(new Option('All permitted libraries',''));for(const view of data.views.filter(view=>!['movies','tvshows'].includes(view.type)||view.type===(type==='Movie'?'movies':'tvshows')))select.append(new Option(view.name,view.id,false,view.id===options.library));form.insertBefore(select,form.querySelector('button'))}catch{/* Optional library selection does not block browsing. */}})());
   }
   await Promise.all(work);
 }

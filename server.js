@@ -9,7 +9,7 @@ import { brandingDefaults, createFeatures } from './features.js';
 import { createMedia } from './media.js';
 import { createPlayback } from './playback.js';
 import { createPersonalization } from './personalization.js';
-import { createCore, libraryItem } from './core.js';
+import { createCore, libraryItem, visibleItems } from './core.js';
 import { createPlugins } from './plugins.js';
 import { createExtensions } from './extensions.js';
 
@@ -152,7 +152,7 @@ async function readBody(req,limit=MAX_BODY){let raw='';for await(const part of r
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
 const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,json,readBody,cleanId,send});
-const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send});
+const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig:()=>config});
 const playbackAPI=createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,send,logger});
 const personalizationAPI=createPersonalization({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId});
 const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConfig});
@@ -283,7 +283,7 @@ const api = async(req,res,url)=>{
   if(url.pathname==='/api/home'){
     const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'DateCreated',SortOrder:'Descending',Limit:'32',Fields:'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,CommunityRating,MediaSources',EnableUserData:'true'});
     const [recent,resume]=await Promise.allSettled([jf(`Users/${s.id}/Items?${q}`,s),jf(`Users/${s.id}/Items/Resume?Limit=18&MediaTypes=Video`,s)]);
-    return json(res,200,{recent:recent.status==='fulfilled'?(recent.value.Items||[]).map(libraryItem):[],resume:resume.status==='fulfilled'?(resume.value.Items||[]).map(libraryItem):[],errors:[recent,resume].filter(x=>x.status==='rejected').map(x=>x.reason.message)});
+    return json(res,200,{recent:recent.status==='fulfilled'?visibleItems(recent.value.Items||[],config,s.id).map(libraryItem):[],resume:resume.status==='fulfilled'?visibleItems(resume.value.Items||[],config,s.id).map(libraryItem):[],errors:[recent,resume].filter(x=>x.status==='rejected').map(x=>x.reason.message)});
   }
   if(url.pathname==='/api/items'){
     const q=new URLSearchParams({Recursive:'true',Limit:'60',Fields:'Overview,Genres,ProductionYear,CommunityRating',EnableUserData:'true',SortBy:'SortName'});

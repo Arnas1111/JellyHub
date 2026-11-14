@@ -67,6 +67,15 @@ test('universal search merges user-scoped Jellyfin and Seerr results without raw
   f.set({discoveryFails:true});const partial=await f.run('/api/search?q=movie');assert.equal(partial.data.library.length,1);assert.equal(partial.data.catalog.length,0);assert.equal(partial.data.errors[0].source,'Seerr');
 });
 
+test('search pages both backends and hidden titles stay out of featured/discovery rows',async()=>{
+  const f=fixture([{Id:'visible',Name:'Movie',Type:'Movie',ProviderIds:{Tmdb:'100'},Path:'/private/file.mp4'}]);
+  const page=await f.run('/api/search?q=movie&page=2');assert.equal(page.data.page,2);assert.doesNotMatch(JSON.stringify(page.data),/private\/file|"Path"/);
+  assert.ok(f.calls.some(call=>call.service==='jf'&&new URL('http://test/'+call.route).searchParams.get('StartIndex')==='60'));
+  assert.ok(f.calls.some(call=>call.service==='seerr'&&call.route.includes('search?')&&call.route.includes('page=2')&&call.headers['X-Api-User']==='7'));
+  await assert.rejects(f.run('/api/search?q=movie&page=0'),/Search page/);
+  f.config.userState=JSON.stringify({viewer:{hiddenItems:['visible']}});assert.deepEqual((await f.run('/api/featured')).data.items,[]);assert.deepEqual((await f.run('/api/discover')).data.movies,[]);
+});
+
 test('discovery and media details use verified Seerr identity; TV season state is normalized',async()=>{
   const f=fixture();const data=await f.run('/api/discover');assert.equal(data.data.movies.length,1);assert.equal(data.data.shows.length,1);
   const detail=await f.run('/api/catalog/tv/300');assert.deepEqual(detail.data.seasons.map(s=>[s.number,s.requested]),[[1,true],[2,false]]);

@@ -111,7 +111,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   volume.oninput=()=>{video.volume=Number(volume.value)/100;video.muted=false;prefs.volume=Number(volume.value);showControls()};volume.onchange=()=>savePreferences({volume:Number(volume.value)});
   root.addEventListener('click',async event=>{
     const action=event.target.closest('[data-action]')?.dataset.action;if(!action)return;
-    if(action==='back'){await Promise.race([stopCurrent(),new Promise(resolve=>setTimeout(resolve,1500))]);onClose()}
+    if(action==='back'){event.target.closest('button').disabled=true;await Promise.race([stopCurrent(),new Promise(resolve=>setTimeout(resolve,1500))]);if(!disposed)onClose()}
     else if(action==='toggle')toggle();else if(action==='rewind')seekTo(position()-10);else if(action==='forward')seekTo(position()+10);
     else if(action==='mute'){video.muted=!video.muted;prefs.muted=video.muted;savePreferences({muted:prefs.muted})}
     else if(action==='fullscreen'){try{if(document.fullscreenElement)await document.exitFullscreen();else if(screen.requestFullscreen)await screen.requestFullscreen();else video.webkitEnterFullscreen?.()}catch{notify('Fullscreen is unavailable in this browser.')}}

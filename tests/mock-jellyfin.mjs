@@ -11,7 +11,7 @@ export async function startPlaybackFixture(){
   const dir=await mkdtemp(path.join(os.tmpdir(),'jellyhub-playback-'));
   const bytes=await fixture('direct.mp4'),calls=[],reports=[],playbackInfo=[];
   let allowPlayback=true,startedCount=0;const userData=new Map();
-  const movie=id=>({Id:id,Name:id==='movie-hls'?'HLS Test Movie':id==='episode2'?'The next episode':id==='episode1'?'The pilot':'Direct Test Movie',Type:id.startsWith('episode')?'Episode':'Movie',SeriesId:id.startsWith('episode')?'series':undefined,SeriesName:id.startsWith('episode')?'Synthetic Series':undefined,SeasonId:id.startsWith('episode')?'season1':undefined,ParentIndexNumber:1,IndexNumber:id==='episode2'?2:1,RunTimeTicks:120000000,UserData:{PlaybackPositionTicks:20000000,Played:false},ImageTags:{},Genres:['Test'],OfficialRating:'G',People:[],Studios:[],Chapters:[{Name:'Opening',StartPositionTicks:0},{Name:'Middle',StartPositionTicks:60000000}]});
+  const movie=id=>({Id:id,Name:id==='movie-hls'?'HLS Test Movie':id==='episode2'?'The next episode':id==='episode1'?'The pilot':'Direct Test Movie',Type:id.startsWith('series')?'Series':id.startsWith('episode')?'Episode':'Movie',SeriesId:id.startsWith('episode')?'series':undefined,SeriesName:id.startsWith('episode')?'Synthetic Series':undefined,SeasonId:id.startsWith('episode')?'season1':undefined,ParentIndexNumber:1,IndexNumber:id==='episode2'?2:1,RunTimeTicks:120000000,UserData:{PlaybackPositionTicks:20000000,Played:false},ImageTags:{},Genres:['Test'],OfficialRating:'G',People:[],Studios:[],Chapters:[{Name:'Opening',StartPositionTicks:0},{Name:'Middle',StartPositionTicks:60000000}]});
   const streams=[{Type:'Video',Index:0,Codec:'h264',BitDepth:8,VideoRange:'SDR',Width:160,Height:90},{Type:'Audio',Index:1,Codec:'aac',Language:'eng',DisplayTitle:'English test tone',IsDefault:true},{Type:'Audio',Index:2,Codec:'aac',Language:'deu',DisplayTitle:'German test tone'},{Type:'Subtitle',Index:3,Codec:'srt',Language:'eng',DisplayTitle:'English subtitles',IsExternal:true}];
   const upstream=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://fixture'),auth=req.headers.authorization||'';let raw='';for await(const part of req)raw+=part;
@@ -20,11 +20,12 @@ export async function startPlaybackFixture(){
     if(url.pathname==='/Users/AuthenticateByName')return json({AccessToken:'secret-token-'+body.Username,User:{Id:body.Username,Name:body.Username,Policy:{IsAdministrator:body.Username==='admin'}}});
     if(!auth.includes('secret-token-'))return json({error:'Token missing'},401);
     if(url.pathname==='/Users/Me')return json({Id:auth.includes('secret-token-admin')?'admin':'viewer',Name:'Viewer',Configuration:{AudioLanguagePreference:'eng'},Policy:{IsAdministrator:auth.includes('secret-token-admin'),EnableMediaPlayback:allowPlayback}});
+    if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'movies-view',Name:'Main movies',CollectionType:'movies'},{Id:'shows-view',Name:'Main shows',CollectionType:'tvshows'},{Id:'music-view',Name:'Music',CollectionType:'music'}]});
     if(url.pathname==='/Items/Filters2')return json({Genres:[{Name:'Test'}],Years:[2026]});
     if(/^\/Users\/[^/]+\/(FavoriteItems|PlayedItems)\//.test(url.pathname)){const id=url.pathname.split('/').at(-1),value={...userData.get(id),[url.pathname.includes('FavoriteItems')?'IsFavorite':'Played']:req.method==='POST'};userData.set(id,value);return json(value)}
     if(url.pathname.endsWith('/Configuration')&&req.method==='POST'||url.pathname==='/Users/Password'){res.writeHead(204);return res.end()}
     if(url.pathname==='/Users/viewer/Items/forbidden')return json({error:'Forbidden'},403);
-    const item=url.pathname.match(/^\/Users\/[^/]+\/Items\/([^/]+)$/);if(item)return json({...movie(item[1]),MediaSources:[{Id:'source1',MediaStreams:streams}],MediaStreams:streams,Path:'/private/never-return.mp4'});
+    const item=url.pathname.match(/^\/Users\/[^/]+\/Items\/([^/]+)$/);if(item)return json({...movie(item[1]),MediaSources:[{Id:'source1',MediaStreams:streams}],MediaStreams:streams,UserData:{...movie(item[1]).UserData,...userData.get(item[1])},Path:'/private/never-return.mp4'});
     if(url.pathname.endsWith('/Items/Resume'))return json({Items:[movie('movie-direct')]});
     if(url.pathname.endsWith('/Items')){
       if(url.searchParams.get('IncludeItemTypes')==='BoxSet')return json({Items:[{Id:'collection',Name:'Test Collection',Type:'BoxSet'}],TotalRecordCount:1});
@@ -35,6 +36,8 @@ export async function startPlaybackFixture(){
       return json({Items:items,TotalRecordCount:items.length});
     }
     if(url.pathname==='/Shows/NextUp')return json({Items:[movie('episode1')]});
+    if(url.pathname==='/Shows/serieslong/Episodes'){const start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:Array.from({length:105},(_,index)=>({...movie('episode'+(index+1)),IndexNumber:index+1,Name:'Long episode '+(index+1),SeriesId:'serieslong'})).slice(start,start+limit),TotalRecordCount:105})}
+    if(url.pathname==='/Shows/serieslong/Seasons')return json({Items:[{Id:'seasonlong',Name:'Season 1'}]});
     if(url.pathname==='/Shows/series/Episodes')return json({Items:[movie('episode1'),movie('episode2')],TotalRecordCount:2});
     if(url.pathname==='/Shows/series/Seasons')return json({Items:[{Id:'season1',Name:'Season 1'}]});
     if(url.pathname.endsWith('/Similar'))return json({Items:[]});

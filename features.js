@@ -1,3 +1,4 @@
+import {visibleItems,libraryItem} from './core.js';
 import crypto from 'node:crypto';
 
 export const brandingDefaults={brandingTitle:'JellyHub',brandingName:'jellyhub.',brandingWelcome:'Discover your next favorite.',brandingAccent:'#9980ff',brandingFavicon:'',brandingLogo:''};
@@ -135,19 +136,21 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       json(res,200,{ok:true});return true;
     }
     if(route==='/api/search'&&method==='GET'){
+      const page=Number(url.searchParams.get('page')||1);if(!Number.isSafeInteger(page)||page<1||page>500)fail(400,'Search page must be between 1 and 500.');
       const query=(url.searchParams.get('q')||'').trim().slice(0,120);if(!query){json(res,200,{library:[],catalog:[],errors:[]});return true}
-      const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,Limit:'60',Fields:'ProviderIds,ProductionYear,Overview'});
-      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:'1'}),identity.headers);return (found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions))})()]);
+      const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,StartIndex:String((page-1)*60),Limit:'60',EnableTotalRecordCount:'true',Fields:'ProviderIds,ProductionYear,Overview'});
+      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:String(page)}),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
       const library=results[0].status==='fulfilled'?results[0].value.Items||[]:[];
-      const catalog=results[1].status==='fulfilled'?attachLibrary(results[1].value,library):[];
-      json(res,200,{library,catalog,errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
+      let catalog=[];if(results[1].status==='fulfilled'){let matches=library;try{matches=[...library,...await libraryMatches(session,results[1].value.items.map(item=>item.id))]}catch{/* Search results still work if the optional cross-page matching query fails. */}catalog=attachLibrary(results[1].value.items,matches)}
+      const pages=Math.max(1,results[0].status==='fulfilled'?Math.ceil((results[0].value.TotalRecordCount||library.length)/60):1,results[1].status==='fulfilled'?results[1].value.pages:1);
+      json(res,200,{library:library.map(libraryItem),catalog,page,pages:Math.min(500,pages),errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
     }
     if(route==='/api/discover'&&method==='GET'){
       const identity=await seerrIdentity(session);
       const [movies,shows]=await Promise.all(['movies','tv'].map(type=>seerr(`discover/${type}?page=1&sortBy=popularity.desc`,identity.headers)));
       const items=[...(movies.results||[]).map(i=>catalogItem(i,'movie',identity.permissions)),...(shows.results||[]).map(i=>catalogItem(i,'tv',identity.permissions))];
       const library=await libraryMatches(session,items.map(i=>i.id));
-      const tagged=attachLibrary(items,library);json(res,200,{movies:tagged.filter(i=>i.mediaType==='movie'),shows:tagged.filter(i=>i.mediaType==='tv')});return true;
+      const tagged=visibleItems(attachLibrary(items,library),getConfig(),session.id);json(res,200,{movies:tagged.filter(i=>i.mediaType==='movie'),shows:tagged.filter(i=>i.mediaType==='tv')});return true;
     }
     if(route==='/api/featured'&&method==='GET'){
       let items=[],source='library';
@@ -158,7 +161,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
         items=(await libraryMatches(session,wanted.map(item=>item.id))).filter(item=>wanted.some(w=>w.id===String(item.ProviderIds?.Tmdb)&&w.type===item.Type));
         if(items.length)source='popular';
       }catch{/* An unconfigured/unavailable Seerr must not prevent the library carousel. */}
-      items=[...new Map(items.map(item=>[item.Id,item])).values()];
+      items=visibleItems(items,getConfig(),session.id);items=[...new Map(items.map(item=>[item.Id,item])).values()];
       let fillers=[];
       if(items.length<8){
         const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'CommunityRating',SortOrder:'Descending',Limit:'30',Fields:'Overview,Genres,ProductionYear,CommunityRating'});
@@ -166,6 +169,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       }
       const hour=Math.floor(Date.now()/3600000);
       const score=item=>crypto.createHash('sha256').update(`${session.id}:${hour}:${item.Id}`).digest('hex');
+      fillers=visibleItems(fillers,getConfig(),session.id);
       const selected=items.sort((a,b)=>score(a).localeCompare(score(b))).slice(0,8),seen=new Set(selected.map(item=>item.Id));
       for(const item of fillers.sort((a,b)=>score(a).localeCompare(score(b)))){if(selected.length>=8)break;if(!seen.has(item.Id)){selected.push(item);seen.add(item.Id);if(source==='popular')source='mixed'}}
       selected.sort((a,b)=>score(a).localeCompare(score(b)));

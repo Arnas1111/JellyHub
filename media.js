@@ -1,3 +1,4 @@
+import {visibleItems} from './core.js';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -10,7 +11,7 @@ function technical(item){
   const video=streams.find(s=>s.Type==='Video');
   return {video:video?{codec:video.Codec,width:video.Width,height:video.Height,range:video.VideoRange}:null,audio:[...new Set(streams.filter(s=>s.Type==='Audio').map(s=>s.Language||s.DisplayTitle||s.Codec))],subtitles:[...new Set(streams.filter(s=>s.Type==='Subtitle').map(s=>s.Language||s.DisplayTitle||'Unknown'))]};
 }
-export function createMedia({jf,jellyfin,authHeader,json,cleanId,send}){
+export function createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig=()=>({})}){
   const tickets=new Map();
   async function playableItem(id,session){
     let item=await jf(`Users/${session.id}/Items/${id}`,session);
@@ -28,20 +29,21 @@ export function createMedia({jf,jellyfin,authHeader,json,cleanId,send}){
       const type=url.searchParams.get('type');if(!['Movie','Series'].includes(type))fail(400,'Invalid library type');
       const q=new URLSearchParams({Limit:'24',MediaTypes:'Video',IncludeItemTypes:type==='Movie'?'Movie':'Episode',Fields:'Overview,PrimaryImageAspectRatio',EnableUserData:'true'});
       const data=await jf(`Users/${session.id}/Items/Resume?${q}`,session);
-      json(res,200,{Items:(data.Items||[]).filter(i=>i.Type===(type==='Movie'?'Movie':'Episode')).map(cleanItem)});return true;
+      json(res,200,{Items:visibleItems(data.Items||[],getConfig(),session.id).filter(i=>i.Type===(type==='Movie'?'Movie':'Episode')).map(cleanItem)});return true;
     }
     const detail=route.match(/^\/api\/details\/([^/]+)$/);
     if(detail&&method==='GET'){
+      const episodeStart=Number(url.searchParams.get('episodeStart')||0);if(!Number.isSafeInteger(episodeStart)||episodeStart<0||episodeStart>500000)fail(400,'Invalid episode page');
       const id=cleanId(detail[1]),item=await jf(`Users/${session.id}/Items/${id}`,session);
       const result={item:cleanItem(item),people:(item.People||[]).slice(0,30).map(p=>({id:p.Id,name:p.Name,role:p.Role||p.Type,type:p.Type,image:!!p.PrimaryImageTag})),studios:(item.Studios||[]).map(s=>s.Name),technical:technical(item),seasons:[],episodes:[],similar:[],errors:[]};
-      const work=[(async()=>{try{const q=new URLSearchParams({UserId:session.id,Limit:'12',Fields:'Overview'});result.similar=(await jf(`Items/${id}/Similar?${q}`,session)).Items?.map(cleanItem)||[]}catch{result.errors.push('Similar titles are unavailable.')}})()];
+      const work=[(async()=>{try{const q=new URLSearchParams({UserId:session.id,Limit:'12',Fields:'Overview'});result.similar=visibleItems((await jf(`Items/${id}/Similar?${q}`,session)).Items||[],getConfig(),session.id).map(cleanItem)}catch{result.errors.push('Similar titles are unavailable.')}})()];
       if(item.Type==='Series')work.push((async()=>{
         try{
           const q=new URLSearchParams({UserId:session.id,IsMissing:'false'});
           result.seasons=(await jf(`Shows/${id}/Seasons?${q}`,session)).Items?.map(cleanItem)||[];
           const selected=url.searchParams.get('seasonId')||result.seasons[0]?.Id;
           if(selected&&!result.seasons.some(s=>s.Id===selected))fail(400,'Unknown season for this series');
-          if(selected){q.set('SeasonId',cleanId(selected));q.set('Limit','100');q.set('Fields','Overview');result.episodes=(await jf(`Shows/${id}/Episodes?${q}`,session)).Items?.filter(e=>!e.IsMissing&&!e.IsVirtualItem).map(cleanItem)||[];result.selectedSeason=selected}
+          if(selected){q.set('SeasonId',cleanId(selected));q.set('Limit','100');q.set('StartIndex',String(episodeStart));q.set('EnableTotalRecordCount','true');q.set('Fields','Overview');const page=await jf(`Shows/${id}/Episodes?${q}`,session);result.episodes=(page.Items||[]).filter(e=>!e.IsMissing&&!e.IsVirtualItem).map(cleanItem);result.episodeStart=episodeStart;result.episodeTotal=page.TotalRecordCount??result.episodes.length+episodeStart;result.selectedSeason=selected}
         }catch(error){if(error.status===400)throw error;result.errors.push('Seasons and episodes are unavailable.')}
       })());
       await Promise.all(work);json(res,200,result);return true;

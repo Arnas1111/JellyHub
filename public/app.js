@@ -55,6 +55,7 @@ async function loadRemovals(){
   try{const data=await cached('/api/removals?ids='+encodeURIComponent(ids.join(',')),60000);if(revision!==state.revision)return;for(const id of ids)delete state.removals[id];Object.assign(state.removals,data.byId);document.querySelectorAll('[data-removal-id]').forEach(el=>el.innerHTML=removalBadge(el.dataset.removalId))}catch{/* Countdown failures must not block library browsing. */}
 }
 function mediaTile(item){
+  if(state.preferences?.spoilerGuard&&item.Type==='Episode'&&!item.UserData?.Played)item={...item,Name:'Episode '+(item.IndexNumber||''),ImageTags:{}};
   const progress=item.RunTimeTicks?Math.min(100,Math.max(0,Number(item.UserData?.PlaybackPositionTicks||0)/item.RunTimeTicks*100)):0;
   state.items??=new Map();if(state.items.size>=1000)state.items.delete(state.items.keys().next().value);state.items.set(item.Id,item);
   const title=escapeHTML(item.Name||'Unknown');return `<article class="tile-card"><button class="tile" data-item="${escapeHTML(item.Id)}"><div class="poster">${item.ImageTags?.Primary?`<img loading="lazy" src="/api/image/${encodeURIComponent(item.Id)}" alt=""/>`:title.slice(0,1)}<span class="removal-overlay" data-removal-id="${escapeHTML(item.Id)}">${removalBadge(item.Id)}</span>${progress?`<progress class="watch-progress" value="${progress}" max="100" aria-label="Watch progress"></progress>`:''}</div><div class="tile-info"><div class="title">${title}</div><div class="sub">${escapeHTML(item.SeriesName||item.ProductionYear||item.Type||'')}</div>${state.preferences?.qualityTags!==false&&(item.QualityTags||[]).length?`<div class="quality-tags">${item.QualityTags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div>`:''}</div></button><button class="tile-menu" data-actions="${escapeHTML(item.Id)}" aria-label="Actions for ${title}" title="Title actions">•••</button></article>`;
@@ -63,8 +64,9 @@ function catalogTile(item){
   const label=item.libraryId?'In your library':[2,3].includes(item.status)?'Requested':item.status===5?'Managed by Seerr':'Discover';
   return `<button class="tile" data-catalog-type="${item.mediaType}" data-catalog-id="${item.id}" ${item.libraryId?`data-item="${escapeHTML(item.libraryId)}"`:''}><div class="poster">${item.posterPath?`<img loading="lazy" src="/api/catalog/image?path=${encodeURIComponent(item.posterPath)}" alt=""/>`:escapeHTML(item.title).slice(0,1)}</div><div class="tile-info"><div class="title">${escapeHTML(item.title)}</div><div class="sub">${escapeHTML(item.year)} · ${item.mediaType==='movie'?'Movie':'TV'}</div><span class="availability">${label}</span></div></button>`;
 }
+let prefetchCount=0;
 function bindTiles(){
-  document.querySelectorAll('[data-item]').forEach(el=>{el.onclick=()=>{const item=state.items?.get(el.dataset.item);if(item?.Type==='BoxSet'){state.page='collections';library('Movie,Series','',{parent:item.Id,label:item.Name})}else showItem(el.dataset.item)};el.onpointerenter=()=>{if(el.dataset.item)cached('/api/details/'+encodeURIComponent(el.dataset.item),30000).catch(()=>{})}});
+  document.querySelectorAll('[data-item]').forEach(el=>{el.onclick=()=>{const item=state.items?.get(el.dataset.item);if(item?.Type==='BoxSet'){state.page='collections';library('Movie,Series','',{parent:item.Id,label:item.Name})}else showItem(el.dataset.item)};el.onpointerenter=()=>{clearTimeout(el.prefetchTimer);el.prefetchTimer=setTimeout(()=>{if(prefetchCount>=2||!el.isConnected)return;prefetchCount++;cached('/api/details/'+encodeURIComponent(el.dataset.item),30000).catch(()=>{}).finally(()=>prefetchCount--)},180)};el.onpointerleave=()=>clearTimeout(el.prefetchTimer)});
   document.querySelectorAll('[data-actions]').forEach(el=>el.onclick=()=>itemActions(el.dataset.actions));
   document.querySelectorAll('[data-catalog-id]:not([data-item])').forEach(el=>el.onclick=()=>showCatalog(el.dataset.catalogType,el.dataset.catalogId));
 }
@@ -87,10 +89,10 @@ async function home(){
     (async()=>{try{const data=await cached('/api/discover');if(revision!==state.revision)return;document.querySelector('#discovery').innerHTML=section('Popular movies',data.movies,catalogTile)+section('Popular shows',data.shows,catalogTile);bindTiles()}catch(error){if(revision===state.revision)document.querySelector('#discovery').innerHTML=`<p class="notice">Recommendations unavailable: ${escapeHTML(error.message)}</p>`}})()
   ]);
 }
-async function search(query=''){
-  recordRoute('search/'+encodeURIComponent(query));
+async function search(query='',page=1){
+  recordRoute('search/'+encodeURIComponent(query)+(page>1?'?page='+page:''));
   state.page='home';const revision=++state.revision;shell();content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1>${searchForm(query)}</div><button class="ghost" id="browse-home">← Back to browsing</button><div id="search-results">${query?'<p class="loader">Searching…</p>':'<p class="muted">Search your Jellyfin library and Seerr’s movie and TV catalog.</p>'}</div>`);bindSearch();document.querySelector('#browse-home').onclick=()=>navigate('home');if(!query.trim())return;
-  try{const result=await cached('/api/search?q='+encodeURIComponent(query));if(revision!==state.revision)return;document.querySelector('#search-results').innerHTML=section('In your library',result.library)+section('Discover & request',result.catalog.filter(i=>!i.libraryId),catalogTile)+result.errors.map(error=>`<p class="notice">${escapeHTML(error.source)}: ${escapeHTML(error.message)}</p>`).join('');bindTiles();loadRemovals()}
+  try{const result=await cached('/api/search?q='+encodeURIComponent(query)+'&page='+page);if(revision!==state.revision)return;document.querySelector('#search-results').innerHTML=section('In your library',result.library)+section('Discover & request',result.catalog.filter(i=>!i.libraryId),catalogTile)+result.errors.map(error=>`<p class="notice">${escapeHTML(error.source)}: ${escapeHTML(error.message)}</p>`).join('')+((result.pages||1)>1?`<nav class="pagination" aria-label="Search pages"><button class="ghost" id="search-previous" ${page===1?'disabled':''}>Previous results</button><span>Page ${page} of ${result.pages}</span><button class="ghost" id="search-next" ${page>=result.pages?'disabled':''}>Next results</button></nav>`:'');for(const [id,delta]of [['#search-previous',-1],['#search-next',1]]){const button=document.querySelector(id);if(button)button.onclick=()=>search(query,page+delta)}bindTiles();loadRemovals()}
   catch(error){if(revision===state.revision)document.querySelector('#search-results').innerHTML=errorHTML(error)}
 }
 async function library(type,query='',options={}){
@@ -98,15 +100,17 @@ async function library(type,query='',options={}){
   const revision=++state.revision;
   return renderLibrary({state,api,cached,content,escapeHTML,mediaTile,bindTiles,loadRemovals,section,isCurrent:()=>revision===state.revision,reload:library,collections:()=>navigate('collections')},type,query,options);
 }
-async function showItem(id,seasonId=''){
-  recordRoute('item/'+encodeURIComponent(id)+(seasonId?'?seasonId='+encodeURIComponent(seasonId):''));
+async function showItem(id,seasonId='',episodeStart=0){
+  const detailQuery=new URLSearchParams();if(seasonId)detailQuery.set('seasonId',seasonId);if(episodeStart)detailQuery.set('episodeStart',String(episodeStart));recordRoute('item/'+encodeURIComponent(id)+(detailQuery.size?'?'+detailQuery:''));
   const revision=++state.revision;state.page='detail';shell();content('<p class="loader">Loading details…</p>');
   try{
-    const data=await cached('/api/details/'+encodeURIComponent(id)+(seasonId?'?seasonId='+encodeURIComponent(seasonId):''),30000);if(revision!==state.revision)return;
-    content(renderDetail(data,escapeHTML));document.querySelector('#back').onclick=()=>navigate('home');
+    const data=await cached('/api/details/'+encodeURIComponent(id)+(detailQuery.size?'?'+detailQuery:''),30000);if(revision!==state.revision)return;
+    content(renderDetail(data,escapeHTML,state.preferences));document.querySelector('#back').onclick=()=>navigate('home');
     document.querySelector('#similar-titles').innerHTML=section('More like this',data.similar);
     document.querySelectorAll('[data-person]').forEach(button=>button.onclick=()=>showPerson(button.dataset.person));
     if(['Movie','Series'].includes(data.item.Type))import('./reviews.js').then(({mountReviews})=>{if(revision===state.revision)mountReviews({root:document.querySelector('#community-reviews'),api,itemId:id,escapeHTML,isCurrent:()=>revision===state.revision})}).catch(()=>{});else document.querySelector('#community-reviews')?.remove();
+    for(const [selector,delta]of [['#previous-episodes',-100],['#next-episodes',100]]){const button=document.querySelector(selector);if(button)button.onclick=()=>showItem(id,data.selectedSeason,Math.max(0,(data.episodeStart||0)+delta))}
+    for(const [selector,key,field]of [['#favorite-media','favorite','IsFavorite'],['#watched-media','played','Played']]){const button=document.querySelector(selector);button.onclick=async()=>{const old=data.item.UserData?.[field]||false,newValue=!old,oldText=button.textContent;button.disabled=true;button.textContent=key==='favorite'?(newValue?'In My list':'Add to My list'):(newValue?'Mark unwatched':'Mark watched');try{await api('/api/user-item/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({[key]:newValue})});data.item.UserData={...data.item.UserData,[field]:newValue};invalidate()}catch(error){button.textContent=oldText;document.querySelector('#detail-preview').textContent=error.message}finally{button.disabled=false}}}
     const picker=document.querySelector('#season-picker');if(picker)picker.onchange=()=>showItem(id,picker.value);
     disposePage=mountDetailPreview({api,itemId:id,root:document.querySelector('#content')});document.querySelector('#play-media').onclick=()=>startPlayback(id);const beginning=document.querySelector('#play-beginning');if(beginning)beginning.onclick=()=>startPlayback(id,0);bindTiles();loadRemovals();
   }catch(error){if(revision===state.revision)content(errorHTML(error))}
@@ -150,11 +154,11 @@ function navigate(page){
 function restoreRoute(){
   if(!state.user)return;
   try{const path=location.hash.slice(1)||'home',[route,query='']=path.split('?'),parts=route.split('/').map(decodeURIComponent),params=new URLSearchParams(query);
-    if(parts[0]==='item'&&parts[1])return showItem(parts[1],params.get('seasonId')||'');
+    if(parts[0]==='item'&&parts[1])return showItem(parts[1],params.get('seasonId')||'',Number(params.get('episodeStart')||0));
     if(parts[0]==='play'&&parts[1])return startPlayback(parts[1],params.has('startTicks')?Number(params.get('startTicks')):undefined);
     if(parts[0]==='catalog'&&['movie','tv'].includes(parts[1])&&/^\d+$/.test(parts[2]||''))return showCatalog(parts[1],parts[2]);
     if(parts[0]==='person'&&parts[1])return showPerson(parts[1]);
-    if(parts[0]==='search')return search(parts[1]||'');
+    if(parts[0]==='search')return search(parts[1]||'',Number(params.get('page')||1));
     if(parts[0]==='library'&&['Movie','Series','BoxSet','Movie,Series'].includes(parts[1])){state.revision++;state.page=parts[1]==='Movie'?'movies':parts[1]==='Series'?'shows':parts[1]==='BoxSet'||params.has('parent')?'collections':'favorites';shell();const options=Object.fromEntries(params);delete options.q;if(options.start)options.start=Number(options.start);return library(parts[1],params.get('q')||'',options)}
     if(parts[0]==='admin'&&state.user.admin){state.adminTab=parts[1]||'general';return navigate('admin')}
     if(['home','movies','shows','collections','favorites','account'].includes(parts[0])||getPage(parts[0],state.user))return navigate(parts[0]);
