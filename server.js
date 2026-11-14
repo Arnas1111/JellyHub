@@ -1,3 +1,4 @@
+import {createRegistration} from './registration.js';
 import {createProfiles,profileName,profileOf,featurePermissions} from './profiles.js';
 import {managementIds,isManagementCollection} from './collection-visibility.js';
 import {createStaticAssets} from './static-assets.js';
@@ -23,7 +24,7 @@ const configDir=process.env.CONFIG_DIR || '/config';
 const configFile=path.join(configDir,'settings.json');
 const defaults={
   ...brandingDefaults,
-  userState:'{}',navigation:'[]',managementCollections:'[]',hiddenManagementCollections:'[]',
+  registrationState:'{}',registrationServiceKey:'',userState:'{}',navigation:'[]',managementCollections:'[]',hiddenManagementCollections:'[]',
   jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
   seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
   sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
@@ -168,12 +169,14 @@ const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConf
 const pluginAPI=createPlugins({jf,json,readBody,cleanId,getConfig:()=>config});
 const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,json});
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
+const registrationAPI=createRegistration({getConfig:()=>config,saveConfig,jf,jellyfin,upstream,authHeader,readBody,json,send,cleanId,logger});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
     const origin=req.headers.origin;
     if(origin && origin!==`http://${req.headers.host}` && origin!==`https://${req.headers.host}`) return json(res,403,{error:'Origin rejected'});
   }
+  if(await registrationAPI(req,res,url,null))return;
   if(await featureAPI(req,res,url,null))return;
   if(url.pathname==='/api/login' && method==='POST'){
     const ip=req.socket.remoteAddress||'unknown';const entry=attempts.get(ip)||{n:0,until:0};
@@ -201,6 +204,7 @@ const api = async(req,res,url)=>{
   const permissions=featurePermissions(config,s.id,s.admin);
   if((url.pathname==='/api/requests'||url.pathname.startsWith('/api/catalog/'))&&!permissions.requests)throw Object.assign(Error('Requests are disabled for this account.'),{status:403});
   if(url.pathname==='/api/active-streams'&&!permissions.streams)throw Object.assign(Error('Active Streams are disabled for this account.'),{status:403});
+  if(await registrationAPI(req,res,url,s))return;
   if(await featureAPI(req,res,url,s))return;
   if(await mediaAPI(req,res,url,s))return;
   if(await playbackAPI(req,res,url,s))return;

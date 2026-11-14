@@ -1,5 +1,18 @@
 # Profiles and server browsing — dev release batch
 
+## Login and registration — publication authorized
+
+The user authorized publishing the prepared login/registration work and the 20% smaller stream badge on 2026-11-14. GitHub Actions runs the release checks before publishing the dev image.
+
+- The sign-in card centers the configured icon/name. “Welcome back” is removed and account help is tucked behind a circled information icon in the top corner. A gray Register option opens username/password/20-character-key fields. Profile portrait filenames are removed visually while accessible button labels remain.
+- Administration → Registration manages enabled state, selected server sections, a shared 20-character key containing letters/symbols, its next expiry, copying and immediate regeneration. Daily expiry and replacement persist in `/config`; expired keys are rejected even if the background rotation timer has not yet run.
+- Admin setup creates a dedicated Jellyfin API key, handling both older 204 responses plus key lookup and newer responses containing the key. Only the server retains this service credential. Public endpoints expose artwork URLs and enabled state, never registration keys, service credentials, user identities or Jellyfin media IDs.
+- Login backgrounds sample media backdrops from the administrator-selected sections, cache at most eight bounded images in memory for an hour, and crossfade every 20 seconds. Reduced motion uses a still. A static gradient remains available before setup or if artwork cannot load.
+- Registration creates native Jellyfin accounts, with selected section access and administrator/delete/download/remote-control privileges disabled. Requests and Active Streams start disabled in JellyHub. The account has an unknown temporary password during setup, is disabled while permissions/password are applied, and is enabled only when complete. Failed setup rolls back the new account when possible. Registration validates fields, origin and invitation key, limits attempts, and does not automatically create Seerr users.
+- Local validation uses simulated Jellyfin, including a real HTTP browser registration/sign-in cycle, public artwork decoding/crossfade, admin controls, old-key rejection, private credential checks, new-user defaults, icon-only portraits, mobile width and day-boundary rotation. Syntax checks, 42 Node checks (one additional POSIX-only check skipped on Windows) and all nine browser suites passed locally. Existing backend containers were not contacted or modified. Docker packaging includes the new modules; CI validates startup and persistent storage before publication.
+
+API compatibility references: [Jellyfin API key creation](https://github.com/jellyfin/jellyfin/blob/v10.11.0/Jellyfin.Api/Controllers/ApiKeyController.cs) and [user creation/password/policy endpoints](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/UserController.cs).
+
 Prepared on `work/next-release`; the user authorized pushing and publishing this batch on 2026-11-14. It includes the playback GUID compatibility repair whose previous publishing run was cancelled during the release hold. GitHub Actions validates the complete batch before publishing the dev image.
 
 ## HTTP LAN compatibility hotfix

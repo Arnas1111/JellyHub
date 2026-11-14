@@ -1,3 +1,4 @@
+import {mountLogin} from './login.js';
 import {renderStreams} from './streams.js';
 import {renderMyList,renderRequests} from './my-list.js';
 import {watchBadge} from './watch-state.js';
@@ -61,12 +62,7 @@ function login(message=''){
   stopStreamCount();
   releasePage();
   clearFeaturedSnapshots();state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
-  root.innerHTML=`<div class="login"><section class="login-card">${brandMarkup()}<h1>Welcome back.</h1><p>Use your existing Jellyfin account.</p><form id="login"><input class="input" name="username" autocomplete="username" placeholder="Username" required/><input class="input" name="password" type="password" autocomplete="current-password" placeholder="Password" required/><button class="primary">Sign in</button><div class="error" id="login-error">${escapeHTML(message)}</div></form></section></div>`;
-  document.querySelector('#login').onsubmit=async event=>{
-    event.preventDefault();const fields=new FormData(event.currentTarget),btn=event.currentTarget.querySelector('button');btn.disabled=true;
-    try{await api('/api/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fields))});state.user=await api('/api/me');await loadUserContext();restoreRoute()}
-    catch(error){document.querySelector('#login-error').textContent=error.message}finally{btn.disabled=false}
-  };
+  disposePage=mountLogin({root,api,brandMarkup,escapeHTML,message,onSignIn:async values=>{await api('/api/login',{method:'POST',body:JSON.stringify(values)});state.user=await api('/api/me');await loadUserContext();restoreRoute()}});
 }
 const content=html=>{releasePage();document.querySelector('#content').innerHTML=html};
 const errorHTML=error=>`<p class="error">${escapeHTML(error.message)}</p>`;

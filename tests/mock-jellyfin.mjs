@@ -11,13 +11,35 @@ export async function startPlaybackFixture(options={}){
   const dir=await mkdtemp(path.join(os.tmpdir(),'jellyhub-playback-'));
   if(options.seerr)await writeFile(path.join(dir,'settings.json'),JSON.stringify({seerrKey:'fixture-key'}));
   const bytes=await fixture('direct.mp4'),calls=[],reports=[],playbackInfo=[];
-  let allowPlayback=true,adminEnabled=true,startedCount=0;const userData=new Map(),avatars=new Map();
+  let allowPlayback=true,adminEnabled=true,startedCount=0;const userData=new Map(),avatars=new Map(),registrationKeys=[],registeredUsers=new Map();
   const movie=id=>({Id:id,Name:id==='movie-hls'?'HLS Test Movie':id==='episode2'?'The next episode':id==='episode1'?'The pilot':'Direct Test Movie',Type:id.startsWith('series')?'Series':id.startsWith('episode')?'Episode':'Movie',SeriesId:id.startsWith('episode')?'series':undefined,SeriesName:id.startsWith('episode')?'Synthetic Series':undefined,SeasonId:id.startsWith('episode')?'season1':undefined,ParentIndexNumber:1,IndexNumber:id==='episode2'?2:1,RunTimeTicks:120000000,UserData:{PlaybackPositionTicks:20000000,Played:false},ImageTags:{},ProviderIds:id==='movie-direct'?{Tmdb:'100'}:id==='movie-hls'?{Tmdb:'200'}:{},Genres:['Test'],OfficialRating:'G',People:[],Studios:[],Chapters:[{Name:'Opening',StartPositionTicks:0},{Name:'Middle',StartPositionTicks:60000000}]});
   const streams=[{Type:'Video',Index:0,Codec:'h264',BitDepth:8,VideoRange:'SDR',Width:160,Height:90},{Type:'Audio',Index:1,Codec:'aac',Language:'eng',DisplayTitle:'English test tone',IsDefault:true},{Type:'Audio',Index:2,Codec:'aac',Language:'deu',DisplayTitle:'German test tone'},{Type:'Subtitle',Index:3,Codec:'srt',Language:'eng',DisplayTitle:'English subtitles',IsExternal:true}];
   const upstream=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://fixture'),auth=req.headers.authorization||'';let raw='';for await(const part of req)raw+=part;
     const body=raw?(url.pathname.includes('/Images/Primary')?raw:JSON.parse(raw)):undefined;calls.push({path:url.pathname,query:Object.fromEntries(url.searchParams),method:req.method,body,range:req.headers.range,auth});
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data))};
+    if(options.registration){
+      const service=auth.includes('registration-service-secret'),administrator=auth.includes('secret-token-admin');
+      if(url.pathname==='/Auth/Keys'){
+        if(!administrator)return json({},403);
+        if(req.method==='POST'){const key={AccessToken:'registration-service-secret',AppName:url.searchParams.get('app')};registrationKeys.push(key);if(options.registrationKey204){res.writeHead(204);return res.end()}return json(key)}
+        return json({Items:registrationKeys});
+      }
+      if(url.pathname==='/Users/New'){
+        if(!service)return json({},403);if(['viewer','admin'].includes(body.Name)||[...registeredUsers.values()].some(user=>user.Name.toLowerCase()===body.Name.toLowerCase()))return json({},409);
+        const user={Id:'new-user-'+(registeredUsers.size+1),Name:body.Name,Password:body.Password,Policy:{IsAdministrator:false,EnableAllFolders:true}};registeredUsers.set(user.Id,user);return json(user);
+      }
+      const changed=url.pathname.match(/^\/Users\/(new-user-\d+)(?:\/(Policy|Password))?$/);
+      if(changed){const user=registeredUsers.get(changed[1]);if(!service||!user)return json({},403);if(req.method==='DELETE'){registeredUsers.delete(user.Id);return json({})}if(changed[2]==='Policy')user.Policy=body;if(changed[2]==='Password')user.Password=body.NewPw;return json({})}
+      if(url.pathname==='/Users/AuthenticateByName'){
+        const user=[...registeredUsers.values()].find(user=>user.Name===body.Username);if(user){if(user.Password!==body.Pw||user.Policy.IsDisabled)return json({},401);return json({AccessToken:'secret-token-'+user.Name,User:{Id:user.Id,Name:user.Name,Policy:user.Policy}})}
+      }
+      if(service&&url.pathname==='/Items')return json({Items:[{Id:'movie-direct',BackdropImageTags:['backdrop']},{Id:'movie-hls',BackdropImageTags:['backdrop']}]});
+      if(service&&/\/Images\/Backdrop$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(options.registrationArtwork||Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
+      if(url.pathname==='/Users/Me'){
+        const name=auth.match(/Token="secret-token-([^\"]+)"/)?.[1],user=[...registeredUsers.values()].find(user=>user.Name===name);if(user)return json({Id:user.Id,Name:user.Name,Policy:user.Policy});
+      }
+    }
     if(url.pathname==='/Users/AuthenticateByName')return json({AccessToken:'secret-token-'+body.Username,User:{Id:body.Username,Name:body.Username,Policy:{IsAdministrator:body.Username==='admin'}}});
     if(url.pathname==='/api/collections/overlay-data')return json(options.management?[{id:1,title:'Basic Movies',mediaServerId:'managed-movies',arrAction:0,isActive:true,deleteAfterDays:7,media:[]},{id:2,title:'Basic Shows',mediaServerId:'managed-shows',arrAction:0,isActive:true,deleteAfterDays:7,media:[]}]:[]);
     if(url.pathname.startsWith('/api/v1/')){

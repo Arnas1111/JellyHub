@@ -1,5 +1,6 @@
+import {renderRegistrationSettings} from './registration-admin.js';
 import {createUIId} from './choices.js';
-const tabs=[['general','General'],['users','Users'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
+const tabs=[['general','General'],['users','Users'],['registration','Registration'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
 const policyLabels={IsAdministrator:'Administrator',IsDisabled:'Disable account',IsHidden:'Hide from login screen',EnableRemoteAccess:'Allow remote access',EnableMediaPlayback:'Allow playback',EnableContentDownloading:'Allow downloads',EnableAudioPlaybackTranscoding:'Allow audio transcoding',EnableVideoPlaybackTranscoding:'Allow video transcoding',EnableAllFolders:'Allow all server sections'};
 
 export async function renderAdministration(ctx){
@@ -11,6 +12,7 @@ export async function renderAdministration(ctx){
   const panel=document.querySelector('#admin-content');
   const feedback=(el,text,status='error')=>{el.dataset.state=status;el.textContent=text};
   try{
+    if(tab==='registration'){await renderRegistrationSettings(ctx,panel,current);return}
     if(tab==='plugins'){
       const data=await api('/api/admin/plugins');if(!current())return;
       panel.innerHTML=`<h2>Plugin compatibility</h2><p class="notice">${e(data.note)}</p><div class="plugin-table">${data.compatibility.map(p=>`<article class="connection"><h3>${e(p.name)}</h3><p>${p.installed?'Installed '+e(p.installed.version)+' · '+e(p.installed.status||'Unknown status'):'Not reported by this server'}</p><p class="muted">${e(p.handling)}</p></article>`).join('')}</div><h2>Other installed plugins</h2>${data.plugins.filter(p=>!data.compatibility.some(c=>c.installed?.id===p.id)).map(p=>`<p>${e(p.name)} · ${e(p.version)} · ${e(p.status||'')}</p>`).join('')||'<p class="muted">None.</p>'}`;return;
