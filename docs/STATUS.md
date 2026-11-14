@@ -23,7 +23,7 @@ Other fixes: static assets resolve relative to the server file instead of the sh
 | Maintainerr card/detail countdowns | Browser detail test; HTTP date arithmetic, cache, inactive collection and user item filtering tests | Existing overlay API/action assumptions require live validation |
 | Unraid XML | XML contract check in CI; local PowerShell parsing | No install on the user's Unraid server |
 
-Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 16 Node checks; 15 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 19 Node checks; 18 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks and a generated WebM video. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
 
 The Connections update tests current form fields without saving, distinguishes missing keys from rejected keys, normalizes key whitespace, supports service URL bases, aligns clear-key controls and colors results. Structured, configurable logging includes safe endpoint/status/timing diagnostics and request IDs while excluding credentials and response bodies. Tests cover 401s, missing keys, non-JSON login pages, redirects, network failures, log filtering, persistence, and failed-save input preservation. Corrupt JSON startup errors omit file contents.
 
@@ -39,10 +39,20 @@ Home now includes universal search and popular movie/show discovery from Seerr. 
 
 Mock-based tests cover identity mismatch, missing Seerr accounts, permission denial, quota failures, season validation, malicious request-owner fields, response redaction, branding validation, unsupported favicon types, policy/configuration preservation, horizontal/mobile layout, detail poster clipping and end-to-end movie/TV request UI. Live Jellyfin/Seerr compatibility remains unverified.
 
+## Cinematic browsing and direct previews
+
+Search is now part of Home only. The sidebar/sign-in brand displays its favicon or an optional separate PNG logo. Logo persistence and image serving are covered by HTTP tests, and the browser verifies the default image actually decodes. Default/custom favicon URLs use matching image extensions.
+
+Home has an hourly-shuffled carousel from accessible popular library matches, with a top-rated-library fallback. It rotates titles every 20 seconds and supports muted direct-play previews, manual controls, reduced-motion/data-saver behavior and pause/cleanup on visibility/navigation changes. Continue Watching rows are filtered to movies or TV episodes. Local details now include ratings, genres, technical information, cast/crew, similar titles and seasons/episodes. Seerr detail artwork/metadata use the same cinematic presentation.
+
+Server tests verify hourly selection, library filtering, details/episode queries, forbidden items, playback-policy checks, range forwarding, short-lived session-bound preview tickets and token/file-path redaction. Browser tests generate a small WebM with MediaRecorder and verify actual decoding/current-time advance, carousel controls, detail previews, season changes and logo upload. These are contract/UI tests, not live media-server validation.
+
+Preview support is deliberately limited to compatible direct-play MP4/M4V (H.264/AAC or MP3) and WebM (VP8/VP9 with Opus/Vorbis), SDR up to 8-bit and 20 Mbps. Other files use artwork. Preview requests disable transcoding/remuxing/live-stream opening and do not send watch-progress reports. No claim is made that arbitrary Jellyfin files will preview successfully.
+
 ## Still incomplete
 
-- Playback, direct play, transcoding, subtitles, audio selection and playback reporting.
-- Full library browsing/pagination (currently capped at 60 items), discovery/search pagination and series/episode navigation. Universal search covers movies and shows on the first results page.
+- Full-length playback, remux/transcoding preview support, subtitle/audio selection and playback reporting. Short compatible direct-play previews are implemented.
+- Full library browsing/pagination (currently capped at 60 items), discovery/search pagination and episode pagination beyond the first 100 episodes in a season. Universal search covers movies and shows on the first results page.
 - Prefetching, request deduplication, optimistic mutations and persistent media caching. There is only a short-lived in-memory response cache and lazy image loading.
 - Jellystat analytics; its current connection test checks HTTP reachability only.
 - Bazarr, Lidarr, Prowlarr and SABnzbd adapters; these services remain independent.

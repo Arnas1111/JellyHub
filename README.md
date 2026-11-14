@@ -1,6 +1,6 @@
 # JellyHub
 
-An independent, modern Jellyfin frontend development preview. Existing Jellyfin and media-management containers stay independent. Playback is not implemented yet.
+An independent, modern Jellyfin frontend development preview. Existing Jellyfin and media-management containers stay independent. Compatible files support short previews; full playback is not implemented yet.
 
 ## Unraid installation
 
@@ -23,15 +23,27 @@ Sign in with your Jellyfin administrator account and open **Administration**. A 
 
 **Branding** changes the sidebar text, browser title, Home greeting, accent color and favicon for all users and the sign-in page. Upload a PNG (up to 512 × 512 pixels) or ICO up to 64 KiB, or reset the favicon. Branding and image data persist in `/config/settings.json` alongside the other settings. Concurrent settings updates are serialized and merged to avoid overwriting unrelated configuration.
 
+The favicon is also displayed next to the sidebar name. An optional separate PNG logo (up to 2048 × 2048 pixels and 2 MiB) can be uploaded under Branding; resetting it restores the favicon. A 512-pixel image already has ample resolution for the small sidebar mark. Favicon URLs use the correct SVG/PNG/ICO extension and the sidebar uses its own image endpoint.
+
 **Users** lists existing Jellyfin accounts. Select an account to rename it, adjust administrator/disabled/hidden flags, playback/download/transcoding permissions, remote access and allowed libraries. Rename and permission changes are separate actions. Existing unexposed policy and configuration fields are preserved. The editor blocks disabling or demoting the current account and rejects removal of the last enabled administrator. Account creation, deletion, password resets and advanced parental controls are not included.
 
 ## Home, universal search and requests
 
 Home has a central movie/show search and Seerr-powered popular movie and TV rows above your Jellyfin library. These are popularity-based recommendations, not personalized recommendations. Search queries both the current user's Jellyfin library and Seerr's catalog, with separate **In your library** and **Discover & request** results. Where TMDB provider IDs match, catalog tiles open the accessible library item. A failed backend is reported without discarding results from the other backend.
 
+Search stays on Home; there is no separate Search sidebar entry. Home's featured carousel selects up to six accessible library titles matching Seerr's popular movies/shows, falling back to top-rated library titles. Its order is stable within each hourly window and is refreshed near the next hour. Titles rotate every 20 seconds with backdrop artwork, metadata and muted clips where compatible. Pause/previous/next controls are provided. Reduced-motion and data-saver preferences disable automatic previews; hidden/offscreen previews pause and navigation releases their streams.
+
+Movies and TV Shows each have their own **Continue watching** row, using movie and episode resume data respectively. Cards display watch-progress bars. Local detail pages include backdrop artwork, ratings, genres, runtime, synopsis, cast/crew, studios, stream information, similar titles, Maintainerr countdowns and season/episode browsing. Only the current user's accessible items are requested; file paths are not included in the new detail response.
+
+### Preview compatibility
+
+Previews currently use direct play for H.264 MP4/M4V with AAC/MP3 audio, and VP8/VP9 WebM with Opus/Vorbis audio. HDR, 10-bit, remote/live/open-required sources, unsupported codecs/containers and sources above 20 Mbps fall back to artwork. Browser support and autoplay policy also affect availability. Series previews use an accessible episode. The detail page offers an explicit **Watch preview** button.
+
+The server negotiates playback without live-stream opening, remuxing or transcoding. It proxies byte ranges through short-lived, session-bound URLs and rechecks item access and playback permission for stream requests. Jellyfin access tokens remain server-side. The UI limits previews to about 20 seconds and does not send playback-progress/session-reporting calls, so previews do not intentionally alter Continue Watching. Full-length playback, HLS/transcoding and playback reporting remain future work. Compatibility with real Jellyfin files has not been verified; browser decoding tests use a locally generated WebM clip and server contract tests use mocks.
+
 Open a discovery title to request a movie or select TV seasons. Requests use standard quality and Seerr's default server/profile settings. Seerr enforces quotas, approval rules and request permissions. JellyHub resolves the signed-in account by immutable Jellyfin ID, verifies impersonation through `/auth/me`, and sends `X-Api-User` on discovery and request calls. It never accepts a browser-supplied request owner or falls back to the API key's administrator identity. Users need an existing matching Seerr account: sign into Seerr once with Jellyfin, or have an administrator import the account there. Discovery/request failures explain missing configuration or mapping. Live service compatibility has not been verified.
 
-Search and discovery currently return the first page only. Movies/shows already accessible to the user are identified through Jellyfin provider IDs; incomplete metadata can prevent automatic matching. Discovery posters are proxied from TMDB through a fixed, validated image endpoint. Playback remains unimplemented.
+Search and discovery currently return the first page only. Movies/shows already accessible to the user are identified through Jellyfin provider IDs; incomplete metadata can prevent automatic matching. Discovery artwork is proxied from TMDB through a fixed, validated image endpoint. Full playback remains unimplemented.
 
 Sonarr/Radarr connections send `X-Api-Key` to `/api/v3/system/status`. Get the key from that service's **Settings → General → Security**; it is different from the web login password. Missing keys are detected before making a request. An HTTP 401 with a configured key means authentication was rejected; check the key, service address and any proxy authentication. A failed settings save means newly entered keys have not been persisted. URLs may include a service URL base such as `http://sonarr:8989/sonarr`.
 

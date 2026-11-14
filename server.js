@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createLogger, logLevels, requestContext, upstreamFailure } from './diagnostics.js';
 import { brandingDefaults, createFeatures } from './features.js';
+import { createMedia } from './media.js';
 
 const port = Number(process.env.PORT || 3000);
 // Runtime settings: service addresses default to the user's existing Docker names.
@@ -145,6 +146,7 @@ async function readBody(req,limit=MAX_BODY){let raw='';for await(const part of r
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
 const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,json,readBody,cleanId,send});
+const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
@@ -175,6 +177,7 @@ const api = async(req,res,url)=>{
     adminOnly(s);
   }
   if(await featureAPI(req,res,url,s))return;
+  if(await mediaAPI(req,res,url,s))return;
   if(url.pathname==='/api/logout' && method==='POST'){
     sessions.delete(sid);
     jf('Sessions/Logout',s,{method:'POST'}).catch(()=>{});
@@ -313,7 +316,7 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
   res.on('finish',()=>logger.log('debug','request.completed',{method:req.method,path:(req.url||'').split('?')[0],status:res.statusCode,durationMs:Date.now()-started}));
   try {
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
-    if(url.pathname==='/favicon.ico'&&await featureAPI(req,res,url,null))return;
+    if(['/favicon.ico','/favicon.png','/favicon.svg','/branding-logo'].includes(url.pathname)&&await featureAPI(req,res,url,null))return;
     if(url.pathname==='/healthz' && ['GET','HEAD'].includes(req.method))return json(res,200,{status:'ok'});
     if(url.pathname.startsWith('/api/'))return await api(req,res,url);
     if(req.method!=='GET'&&req.method!=='HEAD')return send(res,405,'Method not allowed');
@@ -321,9 +324,9 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
     const file=path.resolve(publicDir,name);
     if(!file.startsWith(publicDir))return send(res,403,'Forbidden');
     let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
-    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
+    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
     res.end(body);
-  }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
+  }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});if(res.headersSent){res.destroy();return}json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
 }));
 server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
 server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${server.address().port}`));

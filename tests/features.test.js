@@ -22,7 +22,7 @@ function fixture(){
     if(route==='api/v1/auth/me')return {id:ignoreIdentity?1:7,jellyfinUserId:ignoreIdentity?'admin':'viewer',permissions};
     if(discoveryFails)throw Object.assign(Error('Seerr unavailable'),{status:503});
     if(route.startsWith('api/v1/search?'))return {results:[{id:100,title:'Library Movie',mediaType:'movie',posterPath:'/poster.jpg'},{id:200,title:'Request Movie',mediaType:'movie',mediaInfo:{status:1,requests:[{requestedBy:{email:'private'}}]}},{id:300,name:'A Show',mediaType:'tv'},{id:5,name:'A Person',mediaType:'person'}]};
-    if(route.startsWith('api/v1/discover/'))return {results:[{id:200,title:'Popular',name:'Popular',posterPath:'/poster.jpg'}]};
+    if(route.startsWith('api/v1/discover/'))return {results:[{id:100,title:'Popular',name:'Popular',posterPath:'/poster.jpg'}]};
     if(route==='api/v1/tv/300')return {id:300,name:'A Show',seasons:[{seasonNumber:0,name:'Specials'},{seasonNumber:1,name:'Season 1'},{seasonNumber:2,name:'Season 2'}],mediaInfo:{seasons:[{seasonNumber:1,status:5}]}};
     if(route==='api/v1/movie/200')return {id:200,title:'Request Movie'};
     if(route==='api/v1/request'){if(quotaFails)throw Object.assign(Error('Service returned HTTP 403.'),{status:403});return {id:9,status:1,requestedBy:{email:'private'}}}
@@ -43,6 +43,9 @@ test('branding validates text/color, serves uploaded favicon, resets and never r
   await assert.rejects(()=>f.run('/api/admin/branding/favicon',{method:'PUT',body:{data:Buffer.from('<svg onload="alert(1)"/>').toString('base64')}}),/Only PNG and ICO/);
   await assert.rejects(()=>f.run('/api/admin/branding/favicon',{method:'PUT',body:{data:Buffer.alloc(65537).toString('base64')}}),/64 KiB/);
   await f.run('/api/admin/branding/favicon',{method:'DELETE'});assert.equal(f.config.brandingFavicon,'');
+  await f.run('/api/admin/branding/logo',{method:'PUT',body:{data:png}});assert.equal((await f.run('/branding-logo',{session:null})).headers['Content-Type'],'image/png');assert.match((await f.run('/api/branding',{session:null})).data.logo,/branding-logo/);
+  await assert.rejects(()=>f.run('/api/admin/branding/logo',{method:'PUT',body:{data:Buffer.from('<svg/>').toString('base64')}}),/PNG/);
+  await f.run('/api/admin/branding/logo',{method:'DELETE'});assert.match((await f.run('/api/branding',{session:null})).data.logo,/branding-logo/);
   await assert.rejects(()=>f.run('/api/admin/branding',{method:'PUT',body:{title:'Valid',name:'Name',welcome:'Welcome',accent:'red;display:none'}}),/accent/);
 });
 
@@ -69,6 +72,11 @@ test('discovery and media details use verified Seerr identity; TV season state i
   const detail=await f.run('/api/catalog/tv/300');assert.deepEqual(detail.data.seasons.map(s=>[s.number,s.requested]),[[1,true],[2,false]]);
   f.set({ignoreIdentity:true});await assert.rejects(()=>f.run('/api/discover'),/impersonation/);
   f.set({ignoreIdentity:false,unmapped:true});await assert.rejects(()=>f.run('/api/discover'),/matching Seerr account/);
+});
+
+test('featured titles are accessible library matches and stay stable within an hourly shuffle window',async()=>{
+  const f=fixture();const first=await f.run('/api/featured'),second=await f.run('/api/featured');assert.deepEqual(first.data.items,second.data.items);assert.equal(first.data.items[0].Id,'visible');assert.equal(first.data.reshuffleAt%3600000,0);assert.equal(first.data.source,'popular');
+  f.set({discoveryFails:true});const fallback=await f.run('/api/featured');assert.equal(fallback.data.source,'library');assert.equal(fallback.data.items[0].Id,'visible');
 });
 
 test('movie and season requests enforce actor permissions and upstream quota decisions',async()=>{

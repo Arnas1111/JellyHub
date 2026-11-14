@@ -12,7 +12,7 @@ const serverFile=fileURLToPath(new URL('../server.js',import.meta.url));
 
 test('startup, authentication, media permissions, integrations and persisted settings',async t=>{
   const dir=await mkdtemp(path.join(os.tmpdir(),'jellyhub-test-'));
-  let revoked=false,overlayCalls=0;
+  let revoked=false,overlayCalls=0,playbackAllowed=true,unsupportedVideo=false;
   const calls=[];
   const upstream=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://mock');
@@ -25,10 +25,22 @@ test('startup, authentication, media permissions, integrations and persisted set
       if(Pw!=='secret')return send(401,{});
       return send(200,{AccessToken:Username,User:{Id:Username,Name:Username,Policy:{IsAdministrator:Username==='admin'}}});
     }
-    if(url.pathname==='/Users/Me')return send(200,{Id:token.includes('Token="admin"')?'admin':'viewer',Name:'Test',Policy:{IsAdministrator:token.includes('Token="admin"')&&!revoked}});
+    if(url.pathname==='/Users/Me')return send(200,{Id:token.includes('Token="admin"')?'admin':'viewer',Name:'Test',Policy:{IsAdministrator:token.includes('Token="admin"')&&!revoked,EnableMediaPlayback:playbackAllowed}});
     if(url.pathname==='/Users/viewer/Items/hidden')return send(403,{});
-    if(/^\/Users\/[^/]+\/Items\/(visible|hidden)$/.test(url.pathname))return send(200,{Id:url.pathname.split('/').at(-1),Name:'Movie'});
-    if(url.pathname.endsWith('/Items/Resume'))return send(200,{Items:[{Id:'visible',Name:'Resume'}]});
+    if(/^\/Users\/[^/]+\/Items\/(visible|hidden|series|episode1)$/.test(url.pathname))return send(200,{Id:url.pathname.split('/').at(-1),Name:'Movie',Type:url.pathname.endsWith('series')?'Series':url.pathname.endsWith('episode1')?'Episode':'Movie',RunTimeTicks:90000000000,Path:'/private/movie.mp4',People:[{Name:'An Actor',Role:'Lead',Type:'Actor'}],Studios:[{Name:'A Studio'}],MediaStreams:[{Type:'Video',Codec:'h264',Height:1080},{Type:'Audio',Language:'eng'},{Type:'Subtitle',Language:'deu'}]});
+    if(url.pathname.endsWith('/Items/Resume'))return send(200,{Items:[url.searchParams.get('IncludeItemTypes')==='Episode'?{Id:'episode1',Name:'Episode',Type:'Episode',SeriesName:'A Show'}:{Id:'visible',Name:'Resume',Type:'Movie'}]});
+    if(url.pathname==='/Shows/series/Seasons')return send(200,{Items:[{Id:'season1',Name:'Season 1',Type:'Season'}]});
+    if(url.pathname==='/Shows/series/Episodes')return send(200,{Items:[{Id:'episode1',Name:'Pilot',Type:'Episode',Path:'/private/episode.mp4'}]});
+    if(url.pathname.endsWith('/Similar'))return send(200,{Items:[{Id:'visible',Name:'Related movie',Type:'Movie'}]});
+    if(url.pathname==='/Items/visible/PlaybackInfo'||url.pathname==='/Items/episode1/PlaybackInfo'){
+      let raw='';for await(const part of req)raw+=part;calls.at(-1).body=JSON.parse(raw);
+      return send(200,{MediaSources:[{Id:'source1',Container:unsupportedVideo?'mkv':'mp4',SupportsDirectPlay:true,Path:'/private/movie.mp4',MediaStreams:[{Type:'Video',Codec:'h264',BitDepth:8,VideoRange:'SDR'},{Type:'Audio',Codec:'aac'}]}]});
+    }
+    if(url.pathname==='/Videos/visible/stream'){
+      calls.at(-1).range=req.headers.range;assert.equal(url.searchParams.get('Static'),'true');
+      const bytes=Buffer.from('0123456789');const ranged=!!req.headers.range;
+      res.writeHead(ranged?206:200,{'Content-Type':'video/mp4','Content-Length':ranged?4:10,'Accept-Ranges':'bytes',...(ranged?{'Content-Range':'bytes 0-3/10'}:{})});return res.end(req.method==='HEAD'?undefined:ranged?bytes.subarray(0,4):bytes);
+    }
     if(url.pathname.endsWith('/Items'))return send(200,{Items:[{Id:'visible',Name:'Movie'}]});
     if(url.pathname.endsWith('/Views'))return send(200,{Items:[]});
     if(url.pathname==='/Items/visible/Images/Primary'){res.writeHead(200,{'Content-Type':'image/jpeg'});return res.end('image')}
@@ -88,6 +100,26 @@ test('startup, authentication, media permissions, integrations and persisted set
     await request('/api/removals?ids=visible',{cookie:viewer});assert.equal(overlayCalls,1);
     assert.equal((await (await request('/api/admin/removals',{cookie:admin})).json()).entries.length,2);
   });
+  await t.test('library-specific continue rows and enriched details preserve item permissions and hide file paths',async()=>{
+    const movie=await (await request('/api/continue?type=Movie',{cookie:viewer})).json();assert.equal(movie.Items[0].Type,'Movie');
+    const shows=await (await request('/api/continue?type=Series',{cookie:viewer})).json();assert.equal(shows.Items[0].Type,'Episode');
+    const detail=await (await request('/api/details/visible',{cookie:viewer})).json();assert.equal(detail.people[0].name,'An Actor');assert.equal(detail.technical.video.height,1080);assert.doesNotMatch(JSON.stringify(detail),/private\/movie|"Path"/);
+    const series=await (await request('/api/details/series',{cookie:viewer})).json();assert.equal(series.seasons[0].Id,'season1');assert.equal(series.episodes[0].Name,'Pilot');
+    assert.equal((await request('/api/details/series?seasonId=foreign',{cookie:viewer})).status,400);
+    assert.equal((await request('/api/details/hidden',{cookie:viewer})).status,403);
+    assert.equal((await request('/api/continue?type=invalid',{cookie:viewer})).status,400);
+  });
+  await t.test('preview negotiation and range streaming keep tokens private and reject cross-session access',async()=>{
+    const preview=await (await request('/api/preview/visible',{cookie:viewer})).json();assert.equal(preview.playable,true);assert.equal(preview.clipSeconds,20);assert.doesNotMatch(JSON.stringify(preview),/source1|private|Token|AccessToken/);
+    const info=calls.find(c=>c.path==='/Items/visible/PlaybackInfo');assert.equal(info.body.EnableTranscoding,false);assert.equal(info.body.AutoOpenLiveStream,false);assert.equal(info.body.IsPlayback,false);
+    const stream=await request(preview.url,{cookie:viewer,headers:{Range:'bytes=0-3'}});assert.equal(stream.status,206);assert.equal(stream.headers.get('content-range'),'bytes 0-3/10');assert.equal(await stream.text(),'0123');assert.ok(calls.some(c=>c.range==='bytes=0-3'));
+    assert.equal((await request(preview.url,{cookie:admin})).status,403);assert.equal((await request(preview.url)).status,401);
+    assert.equal((await request(preview.url,{cookie:viewer,headers:{Range:'bytes=0-1,5-6'}})).status,416);
+    assert.equal((await request('/api/preview/hidden',{cookie:viewer})).status,403);
+    playbackAllowed=false;assert.equal((await request('/api/preview/visible',{cookie:viewer})).status,403);assert.equal((await request(preview.url,{cookie:viewer})).status,403);playbackAllowed=true;
+    unsupportedVideo=true;assert.equal((await (await request('/api/preview/visible',{cookie:viewer})).json()).playable,false);unsupportedVideo=false;
+    assert.ok(!calls.some(c=>/Sessions\/Playing|ActiveEncodings/.test(c.path)),'Previews must not report watch progress or start transcoding');
+  });
   await t.test('integration requests use server-side keys; revoked admins lose access',async()=>{
     const overview=await (await request('/api/admin/overview',{cookie:admin})).json();
     assert.ok(overview.integrations.every(i=>i.status==='connected'));
@@ -142,12 +174,15 @@ test('startup, authentication, media permissions, integrations and persisted set
     const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=';
     assert.equal((await request('/api/admin/branding/favicon',{cookie:admin,method:'PUT',body:{data:png}})).status,200);
     assert.equal((await request('/favicon.ico')).headers.get('content-type'),'image/png');
+    assert.equal((await request('/api/admin/branding/logo',{cookie:admin,method:'PUT',body:{data:png}})).status,200);
+    const publicBranding=await (await request('/api/branding')).json();assert.match(publicBranding.favicon,/favicon\.png/);assert.equal((await request(publicBranding.logo)).headers.get('content-type'),'image/png');
     assert.equal(JSON.parse(await readFile(path.join(dir,'settings.json'))).seerrKey,'persisted-secret');
     await stop();await start();
     assert.equal((await request('/api/me',{cookie:admin})).status,401);
     const newAdmin=await login('admin');
     assert.equal((await (await request('/api/branding')).json()).name,'My Hub');
     assert.equal(Buffer.from(await (await request('/favicon.ico')).arrayBuffer()).toString('base64'),png);
+    assert.equal(Buffer.from(await (await request('/branding-logo')).arrayBuffer()).toString('base64'),png);
     assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).logging.level,'debug');
     assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).keys.seerrKey,true);
     await request('/api/admin/overview',{cookie:newAdmin});assert.ok(calls.some(c=>c.key==='persisted-secret'));

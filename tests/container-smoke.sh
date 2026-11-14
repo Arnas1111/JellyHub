@@ -19,9 +19,11 @@ curl --fail http://127.0.0.1:3100/healthz
 curl --fail http://127.0.0.1:3100/ | grep 'id="app"'
 curl --fail http://127.0.0.1:3100/app.js > /dev/null
 curl --fail http://127.0.0.1:3100/admin.js > /dev/null
+curl --fail http://127.0.0.1:3100/cinema.js > /dev/null
 curl --fail http://127.0.0.1:3100/styles.css > /dev/null
 curl --fail http://127.0.0.1:3100/api/branding
 curl --fail http://127.0.0.1:3100/favicon.ico > /dev/null
+curl --fail http://127.0.0.1:3100/branding-logo > /dev/null
 test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3100/api/me)" = 401
 docker exec jellyhub-smoke node -e "const fs=require('fs');if(!/^Uid:\\s+1000\\s+1000\\s+1000\\s+1000$/m.test(fs.readFileSync('/proc/1/status','utf8')))process.exit(1);if(fs.statSync('/config').uid!==1000||fs.statSync('/config/settings.json').uid!==1000||fs.statSync('/config/untouched').uid!==0)process.exit(1)"
 docker exec --user 1000:1000 jellyhub-smoke node -e "const fs=require('fs');if(JSON.parse(fs.readFileSync('/config/settings.json')).seerrKey!=='smoke-test')process.exit(1);fs.writeFileSync('/config/.settings-test.tmp',JSON.stringify({seerrKey:'smoke-test'}),{mode:0o600});fs.renameSync('/config/.settings-test.tmp','/config/settings.json')"

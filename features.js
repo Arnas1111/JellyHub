@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const brandingDefaults={brandingTitle:'JellyHub',brandingName:'jellyhub.',brandingWelcome:'Discover your next favorite.',brandingAccent:'#9980ff',brandingFavicon:''};
+export const brandingDefaults={brandingTitle:'JellyHub',brandingName:'jellyhub.',brandingWelcome:'Discover your next favorite.',brandingAccent:'#9980ff',brandingFavicon:'',brandingLogo:''};
 export const editablePolicies=['IsAdministrator','IsDisabled','IsHidden','EnableRemoteAccess','EnableMediaPlayback','EnableContentDownloading','EnableAudioPlaybackTranscoding','EnableVideoPlaybackTranscoding','EnableAllFolders'];
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 const normalizedId=id=>String(id||'').replaceAll('-','').toLowerCase();
@@ -31,7 +31,7 @@ function validateIcon(data){
 
 export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,cleanId,send}){
   const branding=()=>{
-    const c=getConfig();return {title:c.brandingTitle,name:c.brandingName,welcome:c.brandingWelcome,accent:c.brandingAccent,favicon:'/favicon.ico?v='+crypto.createHash('sha256').update(c.brandingFavicon).digest('hex').slice(0,12)};
+    const c=getConfig();const favicon='/favicon.'+(c.brandingFavicon.startsWith('data:image/png')?'png':c.brandingFavicon?'ico':'svg')+'?v='+crypto.createHash('sha256').update(c.brandingFavicon).digest('hex').slice(0,12);return {title:c.brandingTitle,name:c.brandingName,welcome:c.brandingWelcome,accent:c.brandingAccent,favicon,logo:'/branding-logo?v='+crypto.createHash('sha256').update(c.brandingLogo||c.brandingFavicon).digest('hex').slice(0,12)};
   };
   const seerr=(route,headers={},opts={})=>{
     const c=getConfig();if(!c.seerrKey)fail(503,'Configure the Seerr API key under Administration → Seerr.');
@@ -50,11 +50,11 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
   }
   function catalogItem(item,type,permissions){
     const status=Number(item.mediaInfo?.status)||1;
-    return {id:item.id,mediaType:type,title:item.title||item.name||'Untitled',overview:item.overview||'',year:(item.releaseDate||item.firstAirDate||'').slice(0,4),posterPath:/^\/[\w-]+\.(jpg|png)$/.test(item.posterPath||'')?item.posterPath:null,status,canRequest:canRequest(permissions,type)};
+    return {id:item.id,mediaType:type,title:item.title||item.name||'Untitled',overview:item.overview||'',year:(item.releaseDate||item.firstAirDate||'').slice(0,4),posterPath:/^\/[\w-]+\.(jpg|png)$/.test(item.posterPath||'')?item.posterPath:null,backdropPath:/^\/[\w-]+\.(jpg|png)$/.test(item.backdropPath||'')?item.backdropPath:null,genres:(item.genres||[]).map(g=>typeof g==='string'?g:g.name).filter(Boolean),rating:Number(item.voteAverage)||null,runtime:Number(item.runtime||item.episodeRunTime?.[0])||null,cast:(item.credits?.cast||[]).slice(0,12).map(person=>({name:person.name,role:person.character||''})),status,canRequest:canRequest(permissions,type)};
   }
   async function libraryMatches(session,ids){
     if(!ids.length)return [];
-    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',Limit:'100',Fields:'ProviderIds,ProductionYear',AnyProviderIdEquals:ids.map(id=>'tmdb.'+id).join(',')});
+    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',Limit:'100',Fields:'ProviderIds,ProductionYear,Overview,Genres,CommunityRating',AnyProviderIdEquals:ids.map(id=>'tmdb.'+id).join(',')});
     return (await jf(`Users/${session.id}/Items?${q}`,session)).Items||[];
   }
   function attachLibrary(items,library){
@@ -64,12 +64,25 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
   return async function handle(req,res,url,session){
     const route=url.pathname,method=req.method;
     if(route==='/api/branding'&&method==='GET'){json(res,200,branding());return true}
-    if(route==='/favicon.ico'&&['GET','HEAD'].includes(method)){
-      const icon=getConfig().brandingFavicon;
+    if(['/favicon.ico','/favicon.png','/favicon.svg','/branding-logo'].includes(route)&&['GET','HEAD'].includes(method)){
+      const icon=(route==='/branding-logo'&&getConfig().brandingLogo)||getConfig().brandingFavicon;
       if(icon){const [meta,data]=icon.split(',');send(res,200,Buffer.from(data,'base64'),{'Content-Type':meta.includes('image/png')?'image/png':'image/x-icon'});return true}
       send(res,200,'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171e2c"/><text x="15" y="46" fill="#9980ff" font-family="sans-serif" font-size="48">j</text></svg>',{'Content-Type':'image/svg+xml'});return true;
     }
     if(!session)return false;
+    if(route==='/api/admin/branding/logo'){
+      if(method==='DELETE')await saveConfig({brandingLogo:''});
+      else if(method==='PUT'){
+        const {data}=await readBody(req,2900000);
+        if(typeof data!=='string'||!/^[A-Za-z0-9+/]+={0,2}$/.test(data))fail(400,'Upload a PNG logo.');
+        const bytes=Buffer.from(data,'base64');
+        if(bytes.length>2097152)fail(413,'Logo must be at most 2 MiB.');
+        if(bytes.length<33||!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))||bytes.toString('ascii',12,16)!=='IHDR')fail(400,'Logo must be a PNG image.');
+        if(!bytes.readUInt32BE(16)||!bytes.readUInt32BE(20)||bytes.readUInt32BE(16)>2048||bytes.readUInt32BE(20)>2048)fail(400,'Logo dimensions must be between 1 and 2048 pixels.');
+        await saveConfig({brandingLogo:'data:image/png;base64,'+bytes.toString('base64')});
+      }else fail(405,'Method not allowed');
+      json(res,200,branding());return true;
+    }
     if(route==='/api/admin/branding'){
       if(method==='GET'){json(res,200,branding());return true}
       if(method!=='PUT')fail(405,'Method not allowed');
@@ -136,6 +149,22 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       const library=await libraryMatches(session,items.map(i=>i.id));
       const tagged=attachLibrary(items,library);json(res,200,{movies:tagged.filter(i=>i.mediaType==='movie'),shows:tagged.filter(i=>i.mediaType==='tv')});return true;
     }
+    if(route==='/api/featured'&&method==='GET'){
+      let items=[],source='library';
+      try{
+        const identity=await seerrIdentity(session);
+        const popular=await Promise.all(['movies','tv'].map(type=>seerr('discover/'+type+'?page=1&sortBy=popularity.desc',identity.headers)));
+        const wanted=popular.flatMap((data,index)=>(data.results||[]).map(item=>({id:String(item.id),type:index?'Series':'Movie'})));
+        items=(await libraryMatches(session,wanted.map(item=>item.id))).filter(item=>wanted.some(w=>w.id===String(item.ProviderIds?.Tmdb)&&w.type===item.Type));
+        if(items.length)source='popular';
+      }catch{/* An unconfigured/unavailable Seerr must not prevent the library carousel. */}
+      if(!items.length){const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'CommunityRating',SortOrder:'Descending',Limit:'30',Fields:'Overview,Genres,ProductionYear,CommunityRating'});items=(await jf(`Users/${session.id}/Items?${q}`,session)).Items||[]}
+      const hour=Math.floor(Date.now()/3600000);
+      const score=item=>crypto.createHash('sha256').update(`${session.id}:${hour}:${item.Id}`).digest('hex');
+      const selected=[...new Map(items.map(item=>[item.Id,item])).values()].sort((a,b)=>score(a).localeCompare(score(b))).slice(0,6);
+      const publicItems=selected.map(item=>Object.fromEntries(['Id','Name','Type','Overview','ProductionYear','OfficialRating','CommunityRating','RunTimeTicks','Genres','ImageTags','BackdropImageTags'].filter(key=>item[key]!==undefined).map(key=>[key,item[key]])));
+      json(res,200,{items:publicItems,source,reshuffleAt:(hour+1)*3600000});return true;
+    }
     const mediaRoute=route.match(/^\/api\/catalog\/(movie|tv)\/(\d+)$/);
     if(mediaRoute&&method==='GET'){
       const type=mediaRoute[1],id=numberId(mediaRoute[2]),identity=await seerrIdentity(session);
@@ -166,7 +195,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
     }
     if(route==='/api/catalog/image'&&method==='GET'){
       const imagePath=url.searchParams.get('path');if(!/^\/[\w-]+\.(jpg|png)$/.test(imagePath||''))fail(400,'Invalid poster path');
-      const image=await fetch('https://image.tmdb.org/t/p/w342'+imagePath,{signal:AbortSignal.timeout(6000),redirect:'error'});
+      const image=await fetch('https://image.tmdb.org/t/p/'+(url.searchParams.get('wide')==='1'?'w1280':'w342')+imagePath,{signal:AbortSignal.timeout(6000),redirect:'error'});
       if(!image.ok)fail(404,'Poster unavailable');
       send(res,200,Buffer.from(await image.arrayBuffer()),{'Content-Type':'image/jpeg','Cache-Control':'private, max-age=3600'});return true;
     }
