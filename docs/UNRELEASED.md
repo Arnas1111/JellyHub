@@ -2,6 +2,10 @@
 
 Prepared on `work/next-release`; the user authorized pushing and publishing this batch on 2026-11-14. It includes the playback GUID compatibility repair whose previous publishing run was cancelled during the release hold. GitHub Actions validates the complete batch before publishing the dev image.
 
+## HTTP LAN compatibility hotfix
+
+The filter controls and custom navigation no longer require `crypto.randomUUID`, which is unavailable on ordinary HTTP LAN origins. UI IDs use `crypto.getRandomValues`, which works there. The browser regression suite now uses a non-loopback HTTP hostname and explicitly checks that the secure-context-only API is absent before exercising Movies, TV Shows, My List, filters and collections. The original failure was reproduced in that environment before applying the repair.
+
 ## Home and visual polish
 
 - Cards use a green circled check for **On server**, an indigo circled plus for **Discover**, an amber clock for **Requested**, and a blue service mark for **Managed by Seerr**. Text and icons distinguish states independently of color. Managed-by-Seerr does not imply that the viewer has access to the item in Jellyfin.
