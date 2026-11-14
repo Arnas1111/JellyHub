@@ -20,6 +20,8 @@ export async function startPlaybackFixture(options={}){
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data))};
     if(options.registration){
       const service=auth.includes('registration-service-secret'),administrator=auth.includes('secret-token-admin');
+      if(service&&url.pathname==='/Sessions')return json(options.streams||[]);
+      if(service&&/^\/Users\/[^/]+\/Images\/Primary$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
       if(service&&url.pathname==='/Users')return json([{Name:'viewer'},{Name:'admin'},...[...registeredUsers.values()].map(user=>({Name:user.Name}))]);
       if(url.pathname==='/Auth/Keys'){
         if(!administrator)return json({},403);
@@ -58,7 +60,7 @@ export async function startPlaybackFixture(options={}){
     if(url.pathname==='/Users')return json([{Id:'viewer',Name:'Viewer',Policy:{IsAdministrator:false,EnableAllFolders:true}},{Id:'admin',Name:'admin',Policy:{IsAdministrator:adminEnabled,EnableAllFolders:true}}]);
     if(url.pathname==='/Users/viewer'||url.pathname==='/Users/admin')return json({Id:url.pathname.split('/').at(-1),Name:url.pathname.endsWith('admin')?'admin':'Viewer',Policy:{IsAdministrator:adminEnabled&&url.pathname.endsWith('admin'),EnableAllFolders:true}});
     if(url.pathname==='/Library/VirtualFolders')return json([{ItemId:'movies-view',Name:'Main movies'},{ItemId:'shows-view',Name:'Main shows'}]);
-    if(url.pathname==='/Users/Me')return json({Id:auth.includes('secret-token-admin')?'admin':'viewer',Name:'Viewer',Configuration:{AudioLanguagePreference:'eng'},Policy:{IsAdministrator:adminEnabled&&auth.includes('secret-token-admin'),EnableMediaPlayback:allowPlayback}});
+    if(url.pathname==='/Users/Me')return json({Id:auth.includes('secret-token-admin')?'admin':'viewer',Name:options.presence&&auth.includes('secret-token-admin')?'Administrator':'Viewer',Configuration:{AudioLanguagePreference:'eng'},Policy:{IsAdministrator:adminEnabled&&auth.includes('secret-token-admin'),EnableMediaPlayback:allowPlayback}});
     if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'movies-view',Name:'Main movies',CollectionType:'movies'},{Id:'shows-view',Name:'Main shows',CollectionType:'tvshows'},{Id:'music-view',Name:'Music',CollectionType:'music'}]});
     if(url.pathname==='/Items/Filters2')return json({Genres:[{Name:'Test'}],Years:[2026]});
     if(/^\/Users\/[^/]+\/(FavoriteItems|PlayedItems)\//.test(url.pathname)){const id=url.pathname.split('/').at(-1),value={...userData.get(id),[url.pathname.includes('FavoriteItems')?'IsFavorite':'Played']:req.method==='POST'};userData.set(id,value);return json(value)}

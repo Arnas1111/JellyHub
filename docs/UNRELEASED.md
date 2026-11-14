@@ -1,5 +1,14 @@
 # Profiles and server browsing — dev release batch
 
+## Sidebar online users
+
+- Added a Discord-inspired Online list under sidebar navigation: circular avatars/initials, status dots, display names and watching/paused activity. One row represents one user across multiple devices and Jellyfin GUID formats; active playback takes priority over a paused second device. Rows link to media only when the viewer has Active Streams permission and item access.
+- Online is based on recent requests/check-ins. Idle connections become Away after two minutes and are omitted after five minutes. Expired sessions, anonymous clients and invalid/future timestamps are excluded. The list is capped at 100 rows with an explicit shown count when necessary.
+- Native session discovery uses the configured server-side service credential where available, with brief caching and recent JellyHub sessions merged in. Without server-wide access, a partial-scope hint is displayed. Stream titles require permission/media checks; non-admins cannot see forbidden titles even when the native source returns them.
+- Avatar routes require sign-in and opaque recent-member identifiers. Image fetches are bounded, authenticated server-side and cached; missing pictures fall back to initials. Tokens, session IDs, IP addresses, paths and emails are excluded from the public presence payload.
+- The existing 15-second sidebar refresh also updates presence, stops work when hidden and clears state on logout. Unchanged responses preserve the current member markup and decoded pictures. Mobile uses horizontal member scrolling. Docker packaging and smoke asset checks include the new server/browser modules.
+- Tests cover grouping, stale/away states, partial outage fallback, title permissions, forbidden media, two concurrent signed-in browsers, real image decoding, live refresh, media navigation, logout removal and mobile width using simulated Jellyfin. The desktop sidebar screenshot was visually inspected; live server validation remains pending.
+
 ## Registration wording and default permissions
 
 - The visitor form says only “Registration key”; format, rotation and credential-requirement hints are removed. Invalid keys use a plain error without describing expiry or length. Key generation and rotation continue server-side.
