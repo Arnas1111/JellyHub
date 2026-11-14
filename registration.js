@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
 const DAY=86400000;
+export const registrationPolicyDefaults={IsAdministrator:false,IsDisabled:false,IsHidden:true,EnableAllFolders:false,EnableMediaPlayback:true,EnableAudioPlaybackTranscoding:true,EnableVideoPlaybackTranscoding:true,EnablePlaybackRemuxing:true,EnableRemoteAccess:true,EnableContentDownloading:false,EnableContentDeletion:false,EnableRemoteControlOfOtherUsers:false,EnableSharedDeviceControl:false,EnableUserPreferenceAccess:true,EnablePublicSharing:false,EnableSubtitleManagement:false,EnableLiveTvAccess:false,EnableLiveTvManagement:false};
+const policyDefaults=state=>({...registrationPolicyDefaults,...Object.fromEntries(Object.entries(state.defaultPolicy||{}).filter(([key,value])=>Object.hasOwn(registrationPolicyDefaults,key)&&typeof value==='boolean'))});
+const featureDefaults=state=>({requests:state.defaultFeatures?.requests===true,streams:state.defaultFeatures?.streams===true});
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 const parse=config=>{try{const state=JSON.parse(config.registrationState||'{}');return state&&typeof state==='object'&&!Array.isArray(state)?state:{}}catch{return {}}};
 export function generateRegistrationKey(){const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*+-_=?';let value;do{value=Array.from({length:20},()=>alphabet[crypto.randomInt(alphabet.length)]).join('')}while(!/[A-Za-z]/.test(value)||!/[!@#$%&*+_=?-]/.test(value));return value}
@@ -30,32 +33,36 @@ export function createRegistration({getConfig,saveConfig,jf,jellyfin,upstream,au
     })().finally(()=>artPending=null);return artPending;
   }
   async function configure(input,user){
-    if(Object.keys(input).some(key=>!['enabled','artwork','folders'].includes(key))||typeof input.enabled!=='boolean'||typeof input.artwork!=='boolean'||!Array.isArray(input.folders)||input.folders.length>20||input.folders.some(id=>typeof id!=='string'))fail(400,'Choose registration settings and server sections.');
-    const folders=await jf('Library/VirtualFolders',user),ids=[...new Set(input.folders.map(cleanId))];if(ids.some(id=>!folders.some(folder=>folder.ItemId===id)))fail(400,'A selected server section no longer exists.');if((input.enabled||input.artwork)&&!ids.length)fail(400,'Select at least one server section.');
+    if(Object.keys(input).some(key=>!['enabled','artwork','folders','defaultPolicy','defaultFeatures'].includes(key))||typeof input.enabled!=='boolean'||typeof input.artwork!=='boolean'||!Array.isArray(input.folders)||input.folders.length>20||input.folders.some(id=>typeof id!=='string'))fail(400,'Choose registration settings and server sections.');
+    for(const [field,allowed]of [['defaultPolicy',Object.keys(registrationPolicyDefaults)],['defaultFeatures',['requests','streams']]]){if(input[field]!==undefined&&(!input[field]||typeof input[field]!=='object'||Array.isArray(input[field])||Object.entries(input[field]).some(([key,value])=>!allowed.includes(key)||typeof value!=='boolean')))fail(400,'Choose valid default permissions.')}
+    const defaults=policyDefaults({defaultPolicy:{...policyDefaults(parse(getConfig())),...input.defaultPolicy}});if(defaults.IsAdministrator&&defaults.IsDisabled)fail(400,'Jellyfin administrator accounts cannot require activation.');
+    const folders=await jf('Library/VirtualFolders',user),ids=[...new Set(input.folders.map(cleanId))];if(ids.some(id=>!folders.some(folder=>folder.ItemId===id)))fail(400,'A selected server section no longer exists.');if(input.artwork&&!ids.length)fail(400,'Select at least one server section for artwork.');
     let key=getConfig().registrationServiceKey,created=false;
     if(!key&&(input.enabled||input.artwork)){
       const app='JellyHub registration '+crypto.randomBytes(8).toString('hex'),result=await jf('Auth/Keys?'+new URLSearchParams({app}),user,{method:'POST'});
       key=result?.AccessToken;if(!key){const list=await jf('Auth/Keys',user);key=list.Items?.find(item=>item.AppName===app)?.AccessToken}
       if(typeof key!=='string'||!/^[\w-]{16,128}$/.test(key))fail(502,'Jellyfin did not return the dedicated service key.');created=true;
     }
-    try{await saveConfig(config=>({registrationServiceKey:key||'',registrationState:JSON.stringify({...parse(config),...input,folders:ids})}));art={signature:'',expires:0,items:[],images:new Map()}}
+    try{await saveConfig(config=>({registrationServiceKey:key||'',registrationState:JSON.stringify({...parse(config),...input,folders:ids,defaultPolicy:{...policyDefaults(parse(config)),...input.defaultPolicy},defaultFeatures:{...featureDefaults(parse(config)),...input.defaultFeatures}})}));art={signature:'',expires:0,items:[],images:new Map()}}
     catch(error){if(created)await fetch(new URL('Auth/Keys/'+encodeURIComponent(key),jellyfin()+'/'),{method:'DELETE',headers:{Authorization:authHeader(user,user.deviceId)},signal:AbortSignal.timeout(8000),redirect:'error'}).catch(()=>{});throw error}
   }
   async function createAccount(input){
     const state=await rotate();if(!state.enabled||!getConfig().registrationServiceKey)fail(403,'Registration is not enabled. Ask an administrator.');
-    const hash=value=>crypto.createHash('sha256').update(value).digest();if(!crypto.timingSafeEqual(hash(input.key),hash(state.key)))fail(403,'The registration key is invalid or has expired.');
+    const hash=value=>crypto.createHash('sha256').update(value).digest();if(!crypto.timingSafeEqual(hash(input.key),hash(state.key)))fail(403,'Registration key is not valid.');
+    const existing=await serviceRequest('Users');if((Array.isArray(existing)?existing:[]).some(user=>typeof user.Name==='string'&&user.Name.toLowerCase()===input.username.toLowerCase()))fail(409,'That username is already in use.');
     let id,created=false,stage='creating the account';
     try{
       const result=await serviceRequest('Users/New',{method:'POST',body:{Name:input.username,Password:crypto.randomBytes(32).toString('base64url')}});id=cleanId(result?.Id||'');created=true;
-      const policy={...result.Policy,IsAdministrator:false,IsDisabled:true,IsHidden:true,EnableAllFolders:false,EnabledFolders:state.folders||[],EnableRemoteControlOfOtherUsers:false,EnableSharedDeviceControl:false,EnableContentDeletion:false,EnableContentDeletionFromFolders:[],EnableContentDownloading:false,EnableMediaPlayback:true,EnableAudioPlaybackTranscoding:true,EnableVideoPlaybackTranscoding:true,EnablePlaybackRemuxing:true,EnableRemoteAccess:true,EnableUserPreferenceAccess:true,EnablePublicSharing:false};
+      const defaults=policyDefaults(state),policy={...result.Policy,...defaults,IsAdministrator:false,IsDisabled:true,EnabledFolders:state.folders||[],EnableContentDeletionFromFolders:[]};
       stage='applying account permissions';await serviceRequest(`Users/${id}/Policy`,{method:'POST',body:policy});
-      stage='saving frontend permissions';await saveConfig(config=>{let users;try{users=JSON.parse(config.userState||'{}')}catch{users={}}users[id]={...users[id],featurePermissions:{requests:false,streams:false}};return {userState:JSON.stringify(users)}});
+      stage='saving frontend permissions';await saveConfig(config=>{let users;try{users=JSON.parse(config.userState||'{}')}catch{users={}}users[id]={...users[id],featurePermissions:featureDefaults(state)};return {userState:JSON.stringify(users)}});
       stage='setting the password';await serviceRequest(`Users/${id}/Password`,{method:'POST',body:{NewPw:input.password,ResetPassword:false}});
-      stage='enabling the completed account';await serviceRequest(`Users/${id}/Policy`,{method:'POST',body:{...policy,IsDisabled:false}});
+      stage='applying the completed account defaults';await serviceRequest(`Users/${id}/Policy`,{method:'POST',body:{...policy,IsAdministrator:defaults.IsAdministrator,IsDisabled:defaults.IsDisabled}});
       logger.log('info','registration.account_created');
+      return {created:true,requiresApproval:defaults.IsDisabled};
     }catch(error){
       if(created){try{await serviceRequest('Users/'+id,{method:'DELETE'})}catch{logger.log('error','registration.cleanup_failed',{code:'INCOMPLETE_ACCOUNT'});fail(503,'Account setup did not finish. Ask an administrator to remove the incomplete account before retrying.')}}
-      if(stage==='creating the account'&&[400,409].includes(error.status))fail(409,'This username is unavailable or was rejected by Jellyfin. Choose another username.');if(created)fail(error.status||502,'Account setup failed while '+stage+'. '+error.message);throw error;
+      if(stage==='creating the account'&&error.status===409)fail(409,'That username is already in use.');if(stage==='creating the account'&&error.status===400)fail(400,'Jellyfin could not accept this username.');if(created)fail(error.status||502,'Account setup failed while '+stage+'. '+error.message);throw error;
     }
   }
   return async(req,res,url,user)=>{
@@ -68,14 +75,14 @@ export function createRegistration({getConfig,saveConfig,jf,jellyfin,upstream,au
     if(image&&method==='GET'){if(art.signature!==signature()||!parse(getConfig()).artwork)fail(404,'Artwork unavailable');const picture=art.images.get(image[1]);if(!picture)fail(404,'Artwork unavailable');send(res,200,picture.bytes,{'Content-Type':picture.type,'Cache-Control':'public, max-age=300'});return true}
     if(route==='/api/register'&&method==='POST'){
       const ip=req.socket?.remoteAddress||'unknown',time=now();for(const [key,value]of attempts)if(value.until<=time)attempts.delete(key);const entry=attempts.get(ip)||{count:0,until:time+900000};if(entry.count>=8)fail(429,'Too many registration attempts. Try again in 15 minutes.');if(attempts.size>=2000&&!attempts.has(ip))fail(429,'Registration is busy. Try again later.');attempts.set(ip,{...entry,count:entry.count+1});
-      const input=await readBody(req,4096);if(Object.keys(input).some(key=>!['username','password','key'].includes(key))||typeof input.username!=='string'||!/^\w[\w.-]{2,31}$/.test(input.username)||typeof input.password!=='string'||input.password.length<8||input.password.length>128||typeof input.key!=='string'||input.key.length!==20)fail(400,'Use a username of 3–32 letters, numbers, dots, underscores or hyphens, a password of 8–128 characters and a 20-character registration key.');
+      const input=await readBody(req,4096);if(Object.keys(input).some(key=>!['username','password','key'].includes(key))||typeof input.username!=='string'||typeof input.password!=='string'||typeof input.key!=='string')fail(400,'Enter your account details and registration key.');
       if(!parse(getConfig()).enabled)fail(403,'Registration is not enabled. Ask an administrator.');
       if(pendingRegistrations>=16)fail(429,'Registration is busy. Try again shortly.');pendingRegistrations++;
-      const work=creating.catch(()=>{}).then(()=>createAccount(input));creating=work;try{await work}finally{pendingRegistrations--}json(res,201,{created:true});return true;
+      const work=creating.catch(()=>{}).then(()=>createAccount(input));creating=work;let result;try{result=await work}finally{pendingRegistrations--}json(res,201,result);return true;
     }
     if(route.startsWith('/api/admin/registration')&&user){
       const me=await jf('Users/Me',user);if(!me.Policy?.IsAdministrator)fail(403,'Administrator required');
-      if(route==='/api/admin/registration'&&method==='GET'){const state=await rotate(),folders=await jf('Library/VirtualFolders',user);json(res,200,{enabled:!!state.enabled,artwork:!!state.artwork,folders:state.folders||[],key:state.key,expiresAt:state.expiresAt,configured:!!getConfig().registrationServiceKey,sections:folders.map(item=>({id:item.ItemId,name:item.Name}))});return true}
+      if(route==='/api/admin/registration'&&method==='GET'){const state=await rotate(),folders=await jf('Library/VirtualFolders',user);json(res,200,{enabled:!!state.enabled,artwork:!!state.artwork,folders:state.folders||[],key:state.key,expiresAt:state.expiresAt,configured:!!getConfig().registrationServiceKey,defaultPolicy:policyDefaults(state),defaultFeatures:featureDefaults(state),sections:folders.map(item=>({id:item.ItemId,name:item.Name}))});return true}
       if(route==='/api/admin/registration'&&method==='PUT'){const input=await readBody(req);const work=setup.catch(()=>{}).then(()=>configure(input,user));setup=work;await work;json(res,200,{ok:true});return true}
       if(route==='/api/admin/registration/regenerate'&&method==='POST'){const state=await rotate(true);json(res,200,{key:state.key,expiresAt:state.expiresAt});return true}
     }

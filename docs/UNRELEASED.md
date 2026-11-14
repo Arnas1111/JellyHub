@@ -1,5 +1,13 @@
 # Profiles and server browsing — dev release batch
 
+## Registration wording and default permissions
+
+- The visitor form says only “Registration key”; format, rotation and credential-requirement hints are removed. Invalid keys use a plain error without describing expiry or length. Key generation and rotation continue server-side.
+- JellyHub no longer applies username patterns or password length/complexity rules. Short names, spaces, Unicode and short or blank passwords pass unchanged to Jellyfin. Sign-in accepts blank passwords too. Existing names are checked case-insensitively before creation. Native Jellyfin account-store validation still applies, and JSON type checks, request-size limits, origin checks, rate limits and invite-key verification remain enforced.
+- Administration → Registration now configures default Jellyfin permissions, server-section access and Requests/Active Streams access. Administrators can also require activation. Defaults persist in `/config`, merge correctly across partial settings updates, apply only to future accounts and are not accepted from the visitor's registration payload. Defaults retain previous behavior until edited. Administrator and disabled defaults cannot be combined because Jellyfin rejects that combination.
+- Account setup still uses a random temporary password and a disabled, non-admin policy while initialization is incomplete. The configured administrator/activation state is applied last. Visitors requiring activation receive an appropriate completion message.
+- Validation covers unrestricted credential forwarding, case-insensitive duplicate rejection, saved/default/partial permissions, short and blank-password browser signup/sign-in, plain form text and existing flows using simulated Jellyfin. Live service behavior remains subject to deployment validation.
+
 ## Login and registration — publication authorized
 
 The user authorized publishing the prepared login/registration work and the 20% smaller stream badge on 2026-11-14. GitHub Actions runs the release checks before publishing the dev image.

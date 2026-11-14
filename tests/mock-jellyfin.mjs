@@ -20,6 +20,7 @@ export async function startPlaybackFixture(options={}){
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data))};
     if(options.registration){
       const service=auth.includes('registration-service-secret'),administrator=auth.includes('secret-token-admin');
+      if(service&&url.pathname==='/Users')return json([{Name:'viewer'},{Name:'admin'},...[...registeredUsers.values()].map(user=>({Name:user.Name}))]);
       if(url.pathname==='/Auth/Keys'){
         if(!administrator)return json({},403);
         if(req.method==='POST'){const key={AccessToken:'registration-service-secret',AppName:url.searchParams.get('app')};registrationKeys.push(key);if(options.registrationKey204){res.writeHead(204);return res.end()}return json(key)}
@@ -32,12 +33,12 @@ export async function startPlaybackFixture(options={}){
       const changed=url.pathname.match(/^\/Users\/(new-user-\d+)(?:\/(Policy|Password))?$/);
       if(changed){const user=registeredUsers.get(changed[1]);if(!service||!user)return json({},403);if(req.method==='DELETE'){registeredUsers.delete(user.Id);return json({})}if(changed[2]==='Policy')user.Policy=body;if(changed[2]==='Password')user.Password=body.NewPw;return json({})}
       if(url.pathname==='/Users/AuthenticateByName'){
-        const user=[...registeredUsers.values()].find(user=>user.Name===body.Username);if(user){if(user.Password!==body.Pw||user.Policy.IsDisabled)return json({},401);return json({AccessToken:'secret-token-'+user.Name,User:{Id:user.Id,Name:user.Name,Policy:user.Policy}})}
+        const user=[...registeredUsers.values()].find(user=>user.Name===body.Username);if(user){if(user.Password!==body.Pw||user.Policy.IsDisabled)return json({},401);return json({AccessToken:'secret-token-'+user.Id,User:{Id:user.Id,Name:user.Name,Policy:user.Policy}})}
       }
       if(service&&url.pathname==='/Items')return json({Items:[{Id:'movie-direct',BackdropImageTags:['backdrop']},{Id:'movie-hls',BackdropImageTags:['backdrop']}]});
       if(service&&/\/Images\/Backdrop$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(options.registrationArtwork||Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
       if(url.pathname==='/Users/Me'){
-        const name=auth.match(/Token="secret-token-([^\"]+)"/)?.[1],user=[...registeredUsers.values()].find(user=>user.Name===name);if(user)return json({Id:user.Id,Name:user.Name,Policy:user.Policy});
+        const name=auth.match(/Token="secret-token-([^\"]+)"/)?.[1],user=[...registeredUsers.values()].find(user=>user.Name===name||user.Id===name);if(user)return json({Id:user.Id,Name:user.Name,Policy:user.Policy});
       }
     }
     if(url.pathname==='/Users/AuthenticateByName')return json({AccessToken:'secret-token-'+body.Username,User:{Id:body.Username,Name:body.Username,Policy:{IsAdministrator:body.Username==='admin'}}});

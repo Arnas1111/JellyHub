@@ -181,8 +181,8 @@ const api = async(req,res,url)=>{
   if(url.pathname==='/api/login' && method==='POST'){
     const ip=req.socket.remoteAddress||'unknown';const entry=attempts.get(ip)||{n:0,until:0};
     if(entry.n>=8&&Date.now()<entry.until)return json(res,429,{error:'Too many login attempts'});
-    const {username,password}=await readBody(req);
-    if(typeof username!=='string'||typeof password!=='string'||!username||username.length>128||password.length>1024)return json(res,400,{error:'Invalid credentials'});
+    const {username,password}=await readBody(req,4096);
+    if(typeof username!=='string'||typeof password!=='string'||!username)return json(res,400,{error:'Invalid credentials'});
     const deviceId=crypto.randomUUID();
     try {
       const result=await upstream(jellyfin(),'Users/AuthenticateByName',{method:'POST',body:{Username:username,Pw:password},headers:{'Authorization':authHeader(null,deviceId),'Content-Type':'application/json'}});
