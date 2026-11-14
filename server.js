@@ -4,6 +4,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createLogger, logLevels, requestContext, upstreamFailure } from './diagnostics.js';
 
 const port = Number(process.env.PORT || 3000);
 // Runtime settings: service addresses default to the user's existing Docker names.
@@ -19,13 +20,16 @@ const defaults={
   maintainerrUrl:process.env.MAINTAINERR_URL||'http://Maintainerr:6246',
   seerrKey:process.env.SEERR_API_KEY||'',
   sonarrKey:process.env.SONARR_API_KEY||'',
-  radarrKey:process.env.RADARR_API_KEY||''
+  radarrKey:process.env.RADARR_API_KEY||'',
+  logLevel:logLevels.includes(process.env.LOG_LEVEL)?process.env.LOG_LEVEL:'info'
 };
 let config={...defaults};
 try{
   const saved=JSON.parse(fsSync.readFileSync(configFile,'utf8'));
   if(saved&&typeof saved==='object'&&!Array.isArray(saved))config={...config,...Object.fromEntries(Object.entries(saved).filter(([k,v])=>Object.hasOwn(defaults,k)&&typeof v==='string'))};
-}catch(e){if(e.code!=='ENOENT')throw e}
+}catch(e){if(e.code!=='ENOENT')throw new Error(`Cannot load JellyHub settings (${e.code||e.name}). Check settings.json syntax and CONFIG_DIR read permissions.`)}
+if(!logLevels.includes(config.logLevel))config.logLevel=defaults.logLevel;
+const logger=createLogger(config.logLevel);
 const integrations={
   seerr:{url:config.seerrUrl,key:config.seerrKey},
   sonarr:{url:config.sonarrUrl,key:config.sonarrKey,prefix:'/api/v3'},
@@ -45,13 +49,22 @@ const settingUrls=['jellyfinUrl','seerrUrl','sonarrUrl','radarrUrl','jellystatUr
 const settingKeys=['seerrKey','sonarrKey','radarrKey'];
 function validServiceUrl(value){
   if(typeof value!=='string'||value.length>256)return false;
-  try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash&&u.pathname==='/' }catch{return false}
+  try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash }catch{return false}
+}
+function storageFailure(error){
+  const identity=`UID ${process.getuid?.()??'unknown'} / GID ${process.getgid?.()??'unknown'}`;
+  return Object.assign(new Error(`Cannot save settings in ${configDir} (${error.code||'IO_ERROR'}). JellyHub runs as ${identity}. Mount JellyHub appdata read/write and allow this user to write to it. Restart the updated JellyHub image to initialize permissions; custom --user deployments must prepare directory ownership themselves. No settings were saved.`),{status:503,code:'CONFIG_NOT_WRITABLE'});
+}
+async function storageStatus(){
+  const probe=path.join(configDir,`.write-check-${crypto.randomBytes(6).toString('hex')}`);
+  try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(probe,'',{mode:0o600,flag:'wx'});await fs.rm(probe);return {writable:true}}
+  catch(error){await fs.rm(probe,{force:true}).catch(()=>{});return {writable:false,code:error.code,message:storageFailure(error).message}}
 }
 async function saveConfig(next){
-  await fs.mkdir(configDir,{recursive:true});
   const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
-  try{await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});throw e}
+  try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});logger.log('error','settings.save_failed',{code:e.code,configDir});throw storageFailure(e)}
   config=next;refreshIntegrations();
+  logger.setLevel(next.logLevel);logger.log('info','settings.saved');
 }
 // Read-only Maintainerr adapter; never expose Maintainerr API directly to browsers.
 // Its documented API has no native authentication. Cached results reduce load.
@@ -95,15 +108,28 @@ const json = (res,status,data,headers={}) => send(res,status,JSON.stringify(data
 function send(res,status,body,headers={}) { res.writeHead(status,{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',...headers});res.end(body); }
 function parseCookies(req) { return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim().split('=').slice(0,2)).filter(x=>x.length===2)); }
 function authHeader(session,deviceId) { return `MediaBrowser Client="JellyHub", Device="Web", DeviceId="${deviceId}", Version="0.1.0"${session?.token ? `, Token="${session.token}"` : ''}`; }
-async function upstream(base, route, {headers={},method='GET',body,timeout=8000}={}) {
+async function upstream(base, route, {headers={},method='GET',body,timeout=8000,expectJson=true}={}) {
   if (!base) throw new Error('Service not configured');
   const controller = new AbortController();
   const timer=setTimeout(()=>controller.abort(),timeout);
+  const target=new URL(route,base.endsWith('/')?base:base+'/');
+  const endpoint=target.origin+target.pathname;
+  const started=Date.now();
+  const keyConfigured=!!headers['X-Api-Key'];
+  let status;
   try {
-    const response=await fetch(new URL(route,base.endsWith('/')?base:base+'/'),{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal});
-    const raw=await response.text(); let data; try {data=JSON.parse(raw)} catch {data={message:raw.slice(0,300)}}
-    if(!response.ok) throw Object.assign(new Error(`Upstream returned ${response.status}`),{status:response.status});
+    const response=await fetch(target,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,redirect:'manual'});
+    status=response.status;
+    if(!response.ok)throw Object.assign(new Error('HTTP failure'),{code:'HTTP_ERROR'});
+    const raw=await response.text();let data=null;
+    if(raw&&expectJson){try{data=JSON.parse(raw)}catch{throw Object.assign(new Error('Invalid JSON response'),{code:'INVALID_RESPONSE'})}}
+    logger.log('debug','upstream.completed',{endpoint,method,httpStatus:status,durationMs:Date.now()-started,keyConfigured});
     return data;
+  } catch(error){
+    const code=controller.signal.aborted?'TIMEOUT':error.code||error.cause?.code||'NETWORK_ERROR';
+    const diagnostics=upstreamFailure({endpoint,method,status,code,durationMs:Date.now()-started,keyConfigured,requestId:requestContext.getStore()?.requestId});
+    logger.log('warn','upstream.failed',diagnostics);
+    throw Object.assign(new Error(diagnostics.message),{status:status>=400?status:502,code,diagnostics});
   } finally {clearTimeout(timer)}
 }
 const jf=(route,s,opts={})=>upstream(jellyfin(),route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
@@ -148,15 +174,22 @@ const api = async(req,res,url)=>{
     s.admin=!!me.Policy?.IsAdministrator; s.name=me.Name;
     return json(res,200,{id:me.Id,name:me.Name,admin:s.admin});
   }
+  if(url.pathname==='/api/admin/logging'&&method==='PUT'){
+    const {level}=await readBody(req);
+    if(!logLevels.includes(level))return json(res,400,{error:'Invalid log level'});
+    logger.setLevel(level);
+    try{await saveConfig({...config,logLevel:level});return json(res,200,{level,persisted:true})}
+    catch(error){return json(res,200,{level,persisted:false,message:`Log level applied for this process only. ${error.message}`})}
+  }
   if(url.pathname.startsWith('/api/admin/settings')){
     adminOnly(s);
     if(url.pathname==='/api/admin/settings'&&method==='GET'){
-      return json(res,200,{urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]]))});
+      return json(res,200,{urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]])),logging:{level:logger.level,levels:logLevels},storage:await storageStatus()});
     }
     if(url.pathname==='/api/admin/settings'&&method==='PUT'){
       const incoming=await readBody(req);
       if(!incoming||typeof incoming!=='object'||Array.isArray(incoming)||!incoming.urls||!incoming.keys)return json(res,400,{error:'Invalid settings payload'});
-      const next={...config};
+      const next={...config,logLevel:logger.level};
       for(const k of settingUrls){
         if(!Object.hasOwn(incoming.urls,k))continue;
         const v=incoming.urls[k];
@@ -167,7 +200,7 @@ const api = async(req,res,url)=>{
       for(const k of settingKeys){
         if(Object.hasOwn(incoming.keys,k)){
           if(typeof incoming.keys[k]!=='string'||incoming.keys[k].length>512)return json(res,400,{error:`Invalid key: ${k}`});
-          if(incoming.keys[k])next[k]=incoming.keys[k];
+          if(incoming.keys[k].trim())next[k]=incoming.keys[k].trim();
         }
       }
       if(Array.isArray(incoming.clearKeys))for(const k of incoming.clearKeys){if(!settingKeys.includes(k))return json(res,400,{error:'Invalid clear key'});next[k]=''}
@@ -175,11 +208,24 @@ const api = async(req,res,url)=>{
       return json(res,200,{ok:true,urls:Object.fromEntries(settingUrls.map(k=>[k,config[k]])),keys:Object.fromEntries(settingKeys.map(k=>[k,!!config[k]]))});
     }
     if(url.pathname==='/api/admin/settings/test'&&method==='POST'){
-      const {service}=await readBody(req);
+      const input=await readBody(req);const {service}=input;
       const spec={jellyfin:['jellyfinUrl','System/Info/Public',null],seerr:['seerrUrl','api/v1/status',null],sonarr:['sonarrUrl','api/v3/system/status','sonarrKey'],radarr:['radarrUrl','api/v3/system/status','radarrKey'],jellystat:['jellystatUrl','',null],maintainerr:['maintainerrUrl','api/collections/overlay-data',null]}[service];
       if(!spec)return json(res,400,{error:'Unknown service'});
-      try{await upstream(config[spec[0]],spec[1],{headers:spec[2]&&config[spec[2]]?{'X-Api-Key':config[spec[2]]}:{},timeout:5000});return json(res,200,{status:'connected'})}
-      catch(e){return json(res,200,{status:'error',message:e.message})}
+      if(input.url!==undefined&&!validServiceUrl(input.url))return json(res,400,{error:'Invalid service URL'});
+      if(input.apiKey!==undefined&&(typeof input.apiKey!=='string'||input.apiKey.length>512))return json(res,400,{error:'Invalid API key'});
+      const base=input.url??config[spec[0]];
+      const key=input.clearKey?'':input.apiKey?.trim()||config[spec[2]]||'';
+      const started=Date.now();
+      const endpoint=new URL(spec[1],base.endsWith('/')?base:base+'/');
+      if(spec[2]&&!key){
+        const diagnostics=upstreamFailure({endpoint:endpoint.origin+endpoint.pathname,method:'GET',code:'MISSING_API_KEY',keyConfigured:false,durationMs:0,requestId:requestContext.getStore()?.requestId});
+        logger.log('warn','connection.test_failed',{service,...diagnostics});
+        return json(res,200,{status:'error',message:diagnostics.message,diagnostics});
+      }
+      try{
+        await upstream(base,spec[1],{headers:spec[2]?{'X-Api-Key':key}:{},timeout:5000,expectJson:service!=='jellystat'});
+        return json(res,200,{status:'connected',message:'Connection succeeded using the current form. Changes are saved only with Save settings.',diagnostics:{endpoint:endpoint.origin+endpoint.pathname,httpStatus:200,keyConfigured:!!key,durationMs:Date.now()-started,requestId:requestContext.getStore()?.requestId}});
+      }catch(e){return json(res,200,{status:'error',message:e.message,diagnostics:e.diagnostics})}
     }
     return json(res,405,{error:'Method not allowed'});
   }
@@ -245,7 +291,13 @@ const api = async(req,res,url)=>{
   return json(res,404,{error:'Unknown endpoint'});
 };
 
-const server=http.createServer(async(req,res)=>{
+const startupStorage=await storageStatus();
+if(!startupStorage.writable)logger.log('warn','config.not_writable',{code:startupStorage.code,configDir,message:startupStorage.message});
+const server=http.createServer(async(req,res)=>requestContext.run({requestId:crypto.randomUUID()},async()=>{
+  const requestId=requestContext.getStore().requestId;
+  res.setHeader('X-Request-Id',requestId);
+  const started=Date.now();
+  res.on('finish',()=>logger.log('debug','request.completed',{method:req.method,path:(req.url||'').split('?')[0],status:res.statusCode,durationMs:Date.now()-started}));
   try {
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
     if(url.pathname==='/healthz' && ['GET','HEAD'].includes(req.method))return json(res,200,{status:'ok'});
@@ -257,8 +309,8 @@ const server=http.createServer(async(req,res)=>{
     let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
     res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
     res.end(body);
-  }catch(e){json(res,e.status||502,{error:e.message||'Request failed'});}
-});
+  }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
+}));
 server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
 server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${server.address().port}`));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close(()=>process.exit(0));server.closeIdleConnections();setTimeout(()=>process.exit(1),10000).unref()});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,16 +38,19 @@ test('startup, authentication, media permissions, integrations and persisted set
     }
     if(url.pathname==='/api/v1/request')return send(200,{results:[{id:1}],pageInfo:{results:1}});
     if(url.pathname==='/api/v3/queue')return send(200,{records:[{id:1}],totalRecords:1});
+    if(url.pathname==='/api/v3/system/status'&&!['sonarr-secret','radarr-secret','unsaved-secret'].includes(req.headers['x-api-key']))return send(401,{error:`Rejected key: ${req.headers['x-api-key']}`});
+    if(url.pathname==='/html/api/v3/system/status'){res.writeHead(200,{'Content-Type':'text/html'});return res.end('<html>Login page</html>')}
+    if(url.pathname==='/redirect/api/v3/system/status'){res.writeHead(302,{Location:'/api/v3/system/status'});return res.end()}
     if(['/System/Info/Public','/api/v1/status','/api/v3/system/status'].includes(url.pathname))return send(200,{Version:'mock'});
     if(url.pathname==='/Sessions/Logout')return send(200,{});
     return send(404,{});
   });
   upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
   const service=`http://127.0.0.1:${upstream.address().port}`;
-  let child,base;
+  let child,base,logs='';
   async function start(){
     child=spawn(process.execPath,[serverFile],{cwd:dir,env:{...process.env,PORT:'0',CONFIG_DIR:dir,JELLYFIN_URL:service,MAINTAINERR_URL:service,SEERR_URL:service,SONARR_URL:service,RADARR_URL:service,SEERR_API_KEY:'request-secret',SONARR_API_KEY:'sonarr-secret',RADARR_API_KEY:'radarr-secret'}});
-    let logs='';child.stderr.on('data',d=>logs+=d);
+    logs='';child.stderr.on('data',d=>logs+=d);
     base=await new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>reject(Error('Startup timeout: '+logs)),10000);
       child.on('exit',code=>{clearTimeout(timer);reject(Error(`Exited ${code}: ${logs}`))});
@@ -91,6 +94,39 @@ test('startup, authentication, media permissions, integrations and persisted set
     for(const route of ['/api/admin/settings','/api/admin/overview','/api/admin/removals'])assert.equal((await request(route,{cookie:admin})).status,403);
     revoked=false;
   });
+  await t.test('current form keys, missing keys, rejected keys, URL bases and safe diagnostics',async()=>{
+    const logging=await request('/api/admin/logging',{cookie:admin,method:'PUT',body:{level:'debug'}});
+    assert.equal((await logging.json()).persisted,true);
+    assert.equal((await request('/api/admin/logging',{cookie:viewer,method:'PUT',body:{level:'debug'}})).status,403);
+    assert.equal((await request('/api/admin/logging',{cookie:admin,method:'PUT',body:{level:'bogus'}})).status,400);
+    const testConnection=async body=>(await request('/api/admin/settings/test',{cookie:admin,method:'POST',body:{service:'sonarr',...body}})).json();
+    const unsaved=await testConnection({apiKey:'  unsaved-secret  '});assert.equal(unsaved.status,'connected');
+    assert.equal(JSON.parse(await readFile(path.join(dir,'settings.json'))).sonarrKey,'sonarr-secret');
+    const count=calls.length;const missing=await testConnection({clearKey:true});
+    assert.equal(missing.diagnostics.code,'MISSING_API_KEY');assert.equal(calls.length,count+1,'Only administrator verification should reach upstream');
+    const rejected=await testConnection({apiKey:'wrong-secret'});
+    assert.equal(rejected.status,'error');assert.equal(rejected.diagnostics.httpStatus,401);assert.equal(rejected.diagnostics.keyConfigured,true);
+    assert.match(rejected.diagnostics.hint,/API key/);assert.ok(rejected.diagnostics.requestId);
+    assert.doesNotMatch(JSON.stringify(rejected),/wrong-secret/);
+    const html=await testConnection({url:service+'/html',apiKey:'unsaved-secret'});assert.equal(html.diagnostics.code,'INVALID_RESPONSE');
+    const redirect=await testConnection({url:service+'/redirect',apiKey:'unsaved-secret'});assert.equal(redirect.diagnostics.httpStatus,302);
+    assert.match(redirect.diagnostics.hint,/redirect/);
+    const unreachable=await testConnection({url:'http://127.0.0.1:1',apiKey:'unsaved-secret'});assert.equal(unreachable.status,'error');assert.ok(unreachable.diagnostics.code);
+    // Logs must never contain credentials, cookies, request bodies or upstream response bodies.
+    assert.doesNotMatch(logs,/unsaved-secret|wrong-secret|sonarr-secret|radarr-secret|request-secret|Token=|jh_sid=|Login page/);
+    assert.match(logs,/upstream.failed/);
+    const settings=await (await request('/api/admin/settings',{cookie:admin})).json();assert.equal(settings.logging.level,'debug');assert.equal(settings.storage.writable,true);
+  });
+  await t.test('unwritable appdata returns actionable diagnostics and permits temporary debug logging',{skip:process.platform==='win32'||process.getuid?.()===0},async()=>{
+    await chmod(dir,0o500);
+    try{
+      const settings=await (await request('/api/admin/settings',{cookie:admin})).json();assert.equal(settings.storage.writable,false);
+      const failed=await request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{},keys:{seerrKey:'must-not-save'}}});
+      assert.equal(failed.status,503);const body=await failed.json();assert.equal(body.code,'CONFIG_NOT_WRITABLE');assert.match(body.error,/UID.*read\/write/);assert.ok(body.requestId);
+      assert.notEqual(JSON.parse(await readFile(path.join(dir,'settings.json'))).seerrKey,'must-not-save');
+      const result=await (await request('/api/admin/logging',{cookie:admin,method:'PUT',body:{level:'debug'}})).json();assert.equal(result.persisted,false);assert.equal(result.level,'debug');assert.match(result.message,/process only/);
+    }finally{await chmod(dir,0o700)}
+  });
   await t.test('settings validate, redact secrets, test connections and survive restart',async()=>{
     const invalid=await request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{seerrUrl:'file:///etc/passwd'},keys:{}}});assert.equal(invalid.status,400);
     const saved=await request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{seerrUrl:service},keys:{seerrKey:'persisted-secret'}}});assert.equal(saved.status,200);
@@ -102,6 +138,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     await stop();await start();
     assert.equal((await request('/api/me',{cookie:admin})).status,401);
     const newAdmin=await login('admin');
+    assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).logging.level,'debug');
     assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).keys.seerrKey,true);
     await request('/api/admin/overview',{cookie:newAdmin});assert.ok(calls.some(c=>c.key==='persisted-secret'));
     await request('/api/admin/settings',{cookie:newAdmin,method:'PUT',body:{urls:{},keys:{},clearKeys:['seerrKey']}});

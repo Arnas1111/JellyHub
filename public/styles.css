@@ -10,3 +10,14 @@
 .connection label{display:grid;gap:8px}
 .connection .input{width:100%;min-width:0}
 .connection output{overflow-wrap:anywhere}
+.connection .key-clear{display:flex;align-items:center;gap:9px;color:#aab5c9;font-size:13px;justify-self:start}
+.key-clear input{margin:0;width:16px;height:16px;accent-color:#9980ff;flex:none}
+.key-clear:has(input:disabled){opacity:.5}
+.feedback{overflow-wrap:anywhere;line-height:1.5}
+.feedback[data-state="success"]{color:#98edbf}
+.feedback[data-state="error"]{color:#ffa1a1}
+.feedback[data-state="pending"]{color:#b6c0d8}
+.connection-result p{margin:0 0 8px}
+.connection-result details{margin-top:12px;color:#b6c0d8}
+.connection-result pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.connection .input option{background:#171e2c;color:#fff}

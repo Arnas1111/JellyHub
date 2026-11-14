@@ -1,6 +1,6 @@
 # Repository audit and validation
 
-Audit date: 2026-11-13. This is a development preview, not a complete Jellyfin Web replacement.
+Audit date: 2026-11-13; Connections and permission fixes updated 2026-11-14. This is a development preview, not a complete Jellyfin Web replacement.
 
 ## Findings and repairs
 
@@ -23,7 +23,11 @@ Other fixes: static assets resolve relative to the server file instead of the sh
 | Maintainerr card/detail countdowns | Browser detail test; HTTP date arithmetic, cache, inactive collection and user item filtering tests | Existing overlay API/action assumptions require live validation |
 | Unraid XML | XML contract check in CI; local PowerShell parsing | No install on the user's Unraid server |
 
-Local commands: `npm run check`, `npm test`, `npm run test:browser`. Seven Node checks pass. Browser checks pass in headless Microsoft Edge using API mocks. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 11 Node checks; 10 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+
+The Connections update tests current form fields without saving, distinguishes missing keys from rejected keys, normalizes key whitespace, supports service URL bases, aligns clear-key controls and colors results. Structured, configurable logging includes safe endpoint/status/timing diagnostics and request IDs while excluding credentials and response bodies. Tests cover 401s, missing keys, non-JSON login pages, redirects, network failures, log filtering, persistence, and failed-save input preservation. Corrupt JSON startup errors omit file contents.
+
+The Docker entrypoint now starts briefly as root, initializes ownership of only the config directory and settings file, then drops to the runtime UID/GID. Container tests reproduce root-owned appdata, verify permission repair without recursively changing a nested directory, verify custom UID/GID and mode 0600 settings, and reject read-only mounts. No live Unraid permission repair or Sonarr/Radarr connection is claimed from mock tests.
 
 ## Still incomplete
 

@@ -20,7 +20,7 @@ try{
   browser=await chromium.launch(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{});
   const page=await browser.newPage();
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  let user=null,saved=false,releaseHome;
+  let user=null,saved=false,releaseHome,testPayload,failedSave=false,level='info';
   const urls=Object.fromEntries(['jellyfin','seerr','sonarr','radarr','jellystat','maintainerr'].map(n=>[n+'Url','http://'+n+':3000']));
   await page.route('**/api/**',async route=>{
     const request=route.request();const url=new URL(request.url());
@@ -35,13 +35,19 @@ try{
     if(url.pathname==='/api/removals')return reply({byId:{visible:{collection:'Expiring',deletionDate:new Date(Date.now()+3*86400000).toISOString()}}});
     if(url.pathname==='/api/item/visible')return reply({Id:'visible',Name:'Test Movie',Type:'Movie',Overview:'Test description'});
     if(url.pathname==='/api/items')return reply({Items:[{Id:'visible',Name:'Test Movie',Type:'Movie'}]});
-    if(url.pathname==='/api/admin/settings/test')return reply({status:'connected'});
+    if(url.pathname==='/api/admin/settings/test'){
+      testPayload=request.postDataJSON();
+      return testPayload.service==='radarr'?reply({status:'error',message:'Service returned HTTP 401.',diagnostics:{code:'HTTP_ERROR',httpStatus:401,hint:'Verify the API key.',requestId:'test-request'}}):reply({status:'connected',diagnostics:{httpStatus:200}});
+    }
+    if(url.pathname==='/api/admin/logging'){level=request.postDataJSON().level;return reply({level,persisted:true})}
     if(url.pathname==='/api/admin/settings'){
       if(request.method()==='PUT'){
-        const body=request.postDataJSON();assert.equal(body.keys.seerrKey,'test-key');saved=true;Object.assign(urls,body.urls);
+        const body=request.postDataJSON();assert.equal(body.keys.seerrKey,'test-key');
+        if(failedSave)return reply({error:'Cannot save settings in /config (EACCES). Mount JellyHub appdata read/write.'},503);
+        saved=true;Object.assign(urls,body.urls);
         return reply({ok:true});
       }
-      return reply({urls,keys:{seerrKey:saved,sonarrKey:false,radarrKey:false}});
+      return reply({urls,keys:{seerrKey:saved,sonarrKey:false,radarrKey:false},logging:{level,levels:['silent','error','warn','info','debug']},storage:{writable:!failedSave,message:'Appdata is not writable.'}});
     }
     return reply({error:'Unexpected mocked route'},404);
   });
@@ -53,10 +59,25 @@ try{
   await page.getByText('Playback is not implemented', {exact:false}).waitFor();
   await page.getByRole('button',{name:'Connections'}).click();
   await page.locator('input[name="seerrKey"]').fill('test-key');
+  await page.locator('input[name="sonarrKey"]').fill('unsaved-test-key');
+  await page.locator('[data-test="sonarr"]').click();await page.locator('[data-status="sonarr"]').getByText('Connected',{exact:true}).waitFor();
+  assert.equal(testPayload.apiKey,'unsaved-test-key');assert.equal(saved,false);
+  assert.equal(await page.locator('[data-status="sonarr"]').evaluate(el=>getComputedStyle(el).color),'rgb(152, 237, 191)');
+  await page.locator('[data-test="radarr"]').click();await page.locator('[data-status="radarr"]').getByText('Service returned HTTP 401.',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-status="radarr"]').evaluate(el=>getComputedStyle(el).color),'rgb(255, 161, 161)');
+  assert.equal(await page.locator('.key-clear').first().evaluate(el=>getComputedStyle(el).display),'flex');
+  failedSave=true;
+  await page.getByRole('button',{name:'Save settings',exact:true}).click();await page.locator('#save-status').getByText('Cannot save settings',{exact:false}).waitFor();
+  assert.equal(await page.locator('input[name="seerrKey"]').inputValue(),'test-key','Failed saves must preserve entered keys');
+  failedSave=false;
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
   await page.getByText('Settings saved.',{exact:true}).waitFor();assert.equal(saved,true);
   assert.equal(await page.locator('input[name="seerrKey"]').inputValue(),'');
+  await page.locator('select[name="level"]').selectOption('debug');await page.getByRole('button',{name:'Apply log level'}).click();await page.getByText('Log level saved.',{exact:true}).waitFor();assert.equal(level,'debug');
   await page.locator('[data-test="sonarr"]').click();await page.locator('[data-status="sonarr"]').getByText('Connected',{exact:true}).waitFor();
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Connections must fit a mobile viewport');
+  if(process.env.SCREENSHOT_PATH)await page.screenshot({path:process.env.SCREENSHOT_PATH,fullPage:true});
   // A delayed home response must not replace the page after navigation.
   releaseHome=true;
   await page.getByRole('button',{name:'Home',exact:false}).click();
@@ -69,7 +90,7 @@ try{
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile page must fit viewport');
   assert.deepEqual(errors,[]);
-  console.log('Browser checks passed: login, media detail, countdown, settings save/test, user navigation and mobile width. APIs mocked.');
+  console.log('Browser checks passed: login, media detail, countdown, unsaved-key tests, success/error colors, checkbox alignment, failed-save input preservation, log level, user navigation and mobile width. APIs mocked.');
 }finally{
   await browser?.close();
   if(child.exitCode===null){const exit=once(child,'exit');child.kill();await exit}

@@ -38,7 +38,12 @@ async function settings(){
   try{
     const saved=await api('/api/admin/settings');
     if(revision!==state.revision)return;
-    document.querySelector('#settings').innerHTML=`<p class="muted">Save settings before testing connections. API keys stay on the server. Jellystat only has a reachability check; analytics are pending.</p><form id="connections">${services.map(name=>`<section class="connection"><h2>${escapeHTML(name)}</h2><label>Service URL<input class="input" name="${name}Url" type="url" required value="${escapeHTML(saved.urls[name+'Url'])}"/></label>${keyed.includes(name)?`<label>API key<input class="input" name="${name}Key" type="password" autocomplete="new-password" placeholder="${saved.keys[name+'Key']?'Saved; leave empty to keep':'Not configured'}"/></label><label><input type="checkbox" name="clear-${name}Key"/> Clear saved key</label>`:''}<button class="ghost" type="button" data-test="${name}">Test saved connection</button><output data-status="${name}" aria-live="polite"></output></section>`).join('')}<button class="primary">Save settings</button><p id="save-status" role="status"></p></form>`;
+    document.querySelector('#settings').innerHTML=`<p class="muted">Test connections using the current fields, then save to persist changes. Leave a key blank to use its saved value. Jellystat tests reachability only.</p>${saved.storage?.writable===false?`<p class="feedback" data-state="error" role="alert">${escapeHTML(saved.storage.message)}</p>`:''}<form id="logging" class="connection"><h2>Logging</h2><label>Log level<select class="input" name="level">${(saved.logging?.levels||['silent','error','warn','info','debug']).map(level=>`<option value="${level}" ${level===(saved.logging?.level||'info')?'selected':''}>${level}</option>`).join('')}</select></label><p class="muted">Docker logs include request IDs, HTTP status, timing and connection failure hints. Debug adds successful requests. Credentials and response bodies are excluded.</p><button class="ghost">Apply log level</button><p id="log-status" class="feedback" role="status"></p></form><form id="connections">${services.map(name=>`<section class="connection"><h2>${escapeHTML(name)}</h2><label>Service URL<input class="input" name="${name}Url" type="url" required value="${escapeHTML(saved.urls[name+'Url'])}"/></label>${keyed.includes(name)?`<label>API key<input class="input" name="${name}Key" type="password" autocomplete="new-password" placeholder="${saved.keys[name+'Key']?'Saved; leave empty to keep':'Not configured'}"/></label><label class="key-clear"><input type="checkbox" name="clear-${name}Key" ${saved.keys[name+'Key']?'':'disabled'}/><span>Clear saved key</span></label>`:''}<button class="ghost" type="button" data-test="${name}">Test connection</button><div class="connection-result feedback" data-status="${name}" role="status" aria-live="polite"></div></section>`).join('')}<button class="primary">Save settings</button><p id="save-status" class="feedback" role="status"></p></form>`;
+    document.querySelector('#logging').onsubmit=async e=>{
+      e.preventDefault();const btn=e.currentTarget.querySelector('button');const output=document.querySelector('#log-status');btn.disabled=true;output.dataset.state='pending';output.textContent='Applying log level…';
+      try{const result=await api('/api/admin/logging',{method:'PUT',body:JSON.stringify({level:new FormData(e.currentTarget).get('level')})});output.dataset.state=result.persisted?'success':'error';output.textContent=result.persisted?'Log level saved.':result.message}
+      catch(error){output.dataset.state='error';output.textContent=error.message}finally{btn.disabled=false}
+    };
     document.querySelector('#connections').onsubmit=async e=>{
       e.preventDefault();const form=e.currentTarget;const btn=form.querySelector('button.primary');btn.disabled=true;
       const fields=new FormData(form);
@@ -47,14 +52,21 @@ async function settings(){
         if(revision!==state.revision)return;
         state.cache.clear();state.removals={};
         await settings();
-        if(revision===state.revision)document.querySelector('#save-status').textContent='Settings saved.';
-      }catch(error){if(revision===state.revision)document.querySelector('#save-status').textContent=error.message}
+        if(revision===state.revision){document.querySelector('#save-status').dataset.state='success';document.querySelector('#save-status').textContent='Settings saved.'}
+      }catch(error){if(revision===state.revision){document.querySelector('#save-status').dataset.state='error';document.querySelector('#save-status').textContent=error.message}}
       finally{btn.disabled=false}
     };
     document.querySelectorAll('[data-test]').forEach(btn=>btn.onclick=async()=>{
-      btn.disabled=true;const output=document.querySelector(`[data-status="${btn.dataset.test}"]`);output.textContent='Testing…';
-      try{const result=await api('/api/admin/settings/test',{method:'POST',body:JSON.stringify({service:btn.dataset.test})});output.textContent=result.status==='connected'?'Connected':result.message}
-      catch(error){output.textContent=error.message}finally{btn.disabled=false}
+      const service=btn.dataset.test;const fields=new FormData(document.querySelector('#connections'));
+      btn.disabled=true;const output=document.querySelector(`[data-status="${service}"]`);output.dataset.state='pending';output.textContent='Testing…';
+      try{
+        const result=await api('/api/admin/settings/test',{method:'POST',body:JSON.stringify({service,url:fields.get(service+'Url'),...(keyed.includes(service)?{apiKey:fields.get(service+'Key'),clearKey:fields.has('clear-'+service+'Key')}:{})})});
+        output.dataset.state=result.status==='connected'?'success':'error';
+        output.replaceChildren();const message=document.createElement('p');message.textContent=result.status==='connected'?'Connected':result.message;output.append(message);
+        if(result.diagnostics?.hint){const hint=document.createElement('p');hint.textContent=result.diagnostics.hint;output.append(hint)}
+        if(result.status==='connected'){const note=document.createElement('small');note.textContent='Tested current fields. Save settings to persist changes.';output.append(note)}
+        if(result.diagnostics){const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Connection details';const pre=document.createElement('pre');pre.textContent=Object.entries(result.diagnostics).filter(([,value])=>value!==undefined&&value!==null).map(([key,value])=>`${key}: ${value}`).join('\n');details.append(summary,pre);output.append(details)}
+      }catch(error){output.dataset.state='error';output.textContent=error.message}finally{btn.disabled=false}
     });
   }catch(error){if(revision===state.revision)content(`<p class="error">${escapeHTML(error.message)}</p>`)}
 }
