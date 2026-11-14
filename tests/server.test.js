@@ -68,6 +68,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     assert.equal((await request('/server.js')).status,404);
     assert.equal((await request('/api/me')).status,401);
     assert.equal((await request('/api/login',{method:'POST',body:'{'})).status,400);
+    assert.equal((await request('/api/login',{method:'POST',body:'null'})).status,400);
     assert.equal((await request('/api/login',{method:'POST',body:'x'.repeat(9000)})).status,413);
     assert.equal((await request('/api/login',{method:'POST',body:{username:'viewer',password:'wrong'}})).status,401);
   });
@@ -76,7 +77,8 @@ test('startup, authentication, media permissions, integrations and persisted set
     for(const route of ['/api/home','/api/items?type=Movie','/api/views','/api/item/visible','/api/image/visible'])assert.equal((await request(route,{cookie:viewer})).status,200,route);
     assert.equal((await request('/api/item/hidden',{cookie:viewer})).status,403);
     assert.equal((await request('/api/image/hidden',{cookie:viewer})).status,403);
-    for(const route of ['/api/admin/settings','/api/admin/overview','/api/admin/removals'])assert.equal((await request(route,{cookie:viewer})).status,403,route);
+    for(const route of ['/api/admin/settings','/api/admin/overview','/api/admin/removals','/api/admin/branding','/api/admin/users'])assert.equal((await request(route,{cookie:viewer})).status,403,route);
+    for(const route of ['/api/admin/branding/favicon','/api/admin/users/viewer'])assert.equal((await request(route,{cookie:viewer,method:'PUT',body:{}})).status,403,route);
     assert.equal((await request('/api/admin/settings',{cookie:admin,method:'PUT',headers:{Origin:'http://evil.example'},body:{urls:{},keys:{}}})).status,403);
   });
   await t.test('Maintainerr countdown, caching and item permission filtering',async()=>{
@@ -91,7 +93,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     assert.ok(overview.integrations.every(i=>i.status==='connected'));
     assert.ok(calls.some(c=>c.path==='/api/v1/request'&&c.key==='request-secret'));
     revoked=true;
-    for(const route of ['/api/admin/settings','/api/admin/overview','/api/admin/removals'])assert.equal((await request(route,{cookie:admin})).status,403);
+    for(const route of ['/api/admin/settings','/api/admin/overview','/api/admin/removals','/api/admin/branding','/api/admin/users'])assert.equal((await request(route,{cookie:admin})).status,403);
     revoked=false;
   });
   await t.test('current form keys, missing keys, rejected keys, URL bases and safe diagnostics',async()=>{
@@ -134,10 +136,18 @@ test('startup, authentication, media permissions, integrations and persisted set
     assert.doesNotMatch(await (await request('/api/admin/settings',{cookie:admin})).text(),/persisted-secret/);
     const tested=await (await request('/api/admin/settings/test',{cookie:admin,method:'POST',body:{service:'sonarr'}})).json();assert.equal(tested.status,'connected');
     await request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{},keys:{seerrKey:''}}});
+    const branding={title:'Test Cinema',name:'My Hub',welcome:'Find a movie',accent:'#bbaaee'};
+    await Promise.all([request('/api/admin/branding',{cookie:admin,method:'PUT',body:branding}),request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{sonarrUrl:service},keys:{}}})]);
+    assert.equal((await (await request('/api/branding')).json()).title,'Test Cinema');
+    const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=';
+    assert.equal((await request('/api/admin/branding/favicon',{cookie:admin,method:'PUT',body:{data:png}})).status,200);
+    assert.equal((await request('/favicon.ico')).headers.get('content-type'),'image/png');
     assert.equal(JSON.parse(await readFile(path.join(dir,'settings.json'))).seerrKey,'persisted-secret');
     await stop();await start();
     assert.equal((await request('/api/me',{cookie:admin})).status,401);
     const newAdmin=await login('admin');
+    assert.equal((await (await request('/api/branding')).json()).name,'My Hub');
+    assert.equal(Buffer.from(await (await request('/favicon.ico')).arrayBuffer()).toString('base64'),png);
     assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).logging.level,'debug');
     assert.equal((await (await request('/api/admin/settings',{cookie:newAdmin})).json()).keys.seerrKey,true);
     await request('/api/admin/overview',{cookie:newAdmin});assert.ok(calls.some(c=>c.key==='persisted-secret'));

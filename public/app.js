@@ -1,72 +1,107 @@
-const root=document.querySelector('#app');
-const state={user:null,page:'home',cache:new Map(),selected:null,query:'',viewType:'Movie',removals:{},removalError:null,revision:0};
-const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(url,opts){const res=await fetch(url,{credentials:'same-origin',...opts,headers:{'Content-Type':'application/json',...(opts?.headers||{})}});let data=await res.json().catch(()=>({}));if(!res.ok)throw Error(data.error||'Request failed');return data}
-function cached(key,ttl=45000){const user=state.user;const found=state.cache.get(key);if(found&&Date.now()-found.at<ttl)return Promise.resolve(found.value);return api(key).then(value=>(state.user===user&&state.cache.set(key,{at:Date.now(),value}),value))}
-const icon={settings:'⚙',home:'⌂',movies:'▣',shows:'▤',music:'♫',search:'⌕',admin:'⚙',logout:'↪'};
-function shell(){const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['music','Music'],['search','Search'],...(state.user.admin?[['admin','Administration'],['settings','Connections']]:[])];root.innerHTML=`<div class="layout"><aside class="side"><div class="brand">jelly<b>hub.</b></div><div class="nav">${nav.map(([id,label])=>`<button data-nav="${id}" class="${id===state.page?'active':''}"><span>${icon[id]}</span>${label}</button>`).join('')}</div></aside><main class="main"><header class="top"><div class="eyebrow">Your media universe</div><div class="topright"><span class="pill">${escapeHTML(state.user.name)}</span><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>navigate(b.dataset.nav));document.querySelector('#logout').onclick=async()=>{await api('/api/logout',{method:'POST'});state.user=null;state.cache.clear();state.removals={};state.revision++;login()}}
-function login(message=''){state.user=null;state.cache.clear();state.removals={};root.innerHTML=`<div class="login"><section class="login-card"><div class="brand">jelly<b>hub.</b></div><h1>Welcome back.</h1><p>Use your existing Jellyfin account.</p><form id="login"><input class="input" name="username" autocomplete="username" placeholder="Username" required/><input class="input" name="password" type="password" autocomplete="current-password" placeholder="Password" required/><button class="primary">Sign in</button><div class="error" id="login-error">${escapeHTML(message)}</div></form></section></div>`;document.querySelector('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const btn=e.target.querySelector('button');btn.disabled=true;try{await api('/api/login',{method:'POST',body:JSON.stringify({username:f.get('username'),password:f.get('password')})});state.user=await api('/api/me');navigate('home')}catch(err){document.querySelector('#login-error').textContent=err.message}finally{btn.disabled=false}}}
-function content(html){document.querySelector('#content').innerHTML=html}
-function removalBadge(id){
-  const r=state.removals[String(id)];if(!r)return '';
-  const days=Math.max(0,Math.ceil((Date.parse(r.deletionDate)-Date.now())/86400000));
-  return `<span class="removal-badge" title="Maintainerr collection: ${escapeHTML(r.collection)}">${days===0?'Removal due':`${days}d until removal`}</span>`;
-}
-async function loadRemovals(){
-  const revision=state.revision;
-  const ids=[...new Set([...document.querySelectorAll('[data-removal-id]')].map(el=>el.dataset.removalId))];
-  if(!ids.length)return;
-  try{const d=await cached('/api/removals?ids='+encodeURIComponent(ids.join(',')),60000);if(revision!==state.revision)return;for(const id of ids)delete state.removals[id];state.removals={...state.removals,...(d.byId||{})};state.removalError=null;
-    document.querySelectorAll('[data-removal-id]').forEach(el=>{el.innerHTML=removalBadge(el.dataset.removalId)});
-  }catch(e){state.removalError=e.message}
-}
-function mediaTile(i){const title=escapeHTML(i.Name||'Unknown');return `<button class="tile" data-item="${escapeHTML(i.Id)}"><div class="poster">${i.ImageTags?.Primary?`<img loading="lazy" src="/api/image/${encodeURIComponent(i.Id)}" alt=""/>`:title.slice(0,1)}<span class="removal-overlay" data-removal-id="${escapeHTML(i.Id)}">${removalBadge(i.Id)}</span></div><div class="tile-info"><div class="title">${title}</div><div class="sub">${escapeHTML(i.ProductionYear||i.Type||'')}</div></div></button>`}
-function bindTiles(){document.querySelectorAll('[data-item]').forEach(el=>el.onclick=()=>showItem(el.dataset.item))}
-async function showItem(id){const revision=++state.revision;state.page='detail';shell();content('<div class="loader">Loading details…</div>');try{const i=await cached('/api/item/'+encodeURIComponent(id),30000);if(revision!==state.revision)return;content(`<button class="ghost" id="back">← Back</button><div class="detail"><div class="poster">${i.ImageTags?.Primary?`<img src="/api/image/${encodeURIComponent(i.Id)}" alt=""/>`:'♪'}</div><div><div class="eyebrow">${escapeHTML(i.Type)}</div><h1 class="heading">${escapeHTML(i.Name)}</h1><div class="muted">${escapeHTML(i.ProductionYear||'')} ${i.RunTimeTicks?' · '+Math.round(i.RunTimeTicks/600000000)+' min':''}</div><div class="detail-removal" data-removal-id="${escapeHTML(i.Id)}">${removalBadge(i.Id)}</div><p>${escapeHTML(i.Overview||'No description available.')}</p><div class="notice">Playback is not implemented in this prototype. Continue watching in your existing Jellyfin client until a compatible player and transcoding support are added.</div></div></div>`);document.querySelector('#back').onclick=()=>navigate('home');loadRemovals()}catch(e){if(revision!==state.revision)return;content(`<div class="error">${escapeHTML(e.message)}</div>`)}}
-async function home(){const revision=state.revision;content(`<div class="eyebrow">Discover · Watch · Enjoy</div><h1 class="heading">Good to see you, ${escapeHTML(state.user.name)}.</h1><p class="muted">Your library, without the clutter.</p><div class="hero"><div><div class="eyebrow">JELLYHUB PREVIEW</div><h2>Everything you love.<br/>One place.</h2><p>A modern frontend connected to your existing Jellyfin server.</p></div></div><div id="rows"><div class="loader">Loading your library…</div></div>`);try{const d=await cached('/api/home');if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=[['Continue watching',d.resume],['Recently added',d.recent]].map(([name,items])=>`<div class="section-head"><h2>${name}</h2><span class="muted">${items.length} items</span></div>${items.length?`<div class="grid">${items.map(mediaTile).join('')}</div>`:'<p class="muted">Nothing to display yet.</p>'}`).join('')+(d.errors?.length?`<div class="notice">Some Jellyfin library queries failed: ${escapeHTML(d.errors.join('; '))}</div>`:'');bindTiles();loadRemovals()}catch(e){if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=`<div class="error">${escapeHTML(e.message)}</div>`}}
-async function library(type,q=''){const revision=++state.revision;const label={Movie:'Movies',Series:'TV Shows',Audio:'Music'}[type];content(`<div class="eyebrow">Your collection</div><h1 class="heading">${label}</h1><div class="bar"><input id="filter" class="input" placeholder="Search ${label.toLowerCase()}" value="${escapeHTML(q)}"/><button id="filterbtn" class="primary">Search</button></div><div id="items" class="loader">Loading…</div>`);const doSearch=()=>{state.query=document.querySelector('#filter').value;library(type,state.query)};document.querySelector('#filterbtn').onclick=doSearch;document.querySelector('#filter').onkeydown=e=>{if(e.key==='Enter')doSearch()};try{const d=await cached('/api/items?type='+encodeURIComponent(type)+(q?'&q='+encodeURIComponent(q):''));if(revision!==state.revision)return;document.querySelector('#items').className='grid';document.querySelector('#items').innerHTML=(d.Items||[]).map(mediaTile).join('')||'<p class="muted">No results.</p>';bindTiles();loadRemovals()}catch(e){if(revision!==state.revision)return;document.querySelector('#items').innerHTML=escapeHTML(e.message)}}
-async function admin(){const revision=state.revision;if(!state.user.admin)return navigate('home');content('<div class="eyebrow">Operations center</div><h1 class="heading">Administration</h1><p class="muted">Seerr requests, Sonarr / Radarr queues and future Jellystat analytics in one place.</p><div id="adminpanel" class="loader">Checking integrations…</div>');try{const d=await api('/api/admin/overview');if(revision!==state.revision)return;const svc=d.integrations;const cards=svc.map(s=>`<div class="stat"><h3>${escapeHTML(s.name.toUpperCase())}</h3><div class="value">${s.status==='connected'?Number(s.data.total||0).toLocaleString():'—'}</div><span class="status ${escapeHTML(s.status)}">${escapeHTML(s.status)}</span></div>`).join('');let lists=svc.map(s=>{const items=s.name==='seerr'?s.data?.requests:s.data?.records;return `<div class="section-head"><h2>${escapeHTML(s.name)} ${s.name==='seerr'?'requests':'queue'}</h2><span class="status ${escapeHTML(s.status)}">${escapeHTML(s.status)}</span></div><div class="list">${items?.length?items.map(x=>`<div class="line"><span>${escapeHTML(x.media?.title||x.title||x.titleSlug||x.downloadId||x.id||'Item')} ${x.status!==undefined?'· status '+escapeHTML(x.status):''}</span><small>${escapeHTML(x.requestedBy?.displayName||x.protocol||'')}</small></div>`).join(''):`<div class="line"><span class="muted">${escapeHTML(s.message||'No items, or service not connected')}</span></div>`}</div>`}).join('');document.querySelector('#adminpanel').innerHTML=`<div class="cards">${cards}</div>${lists}<div class="section-head"><h2>Jellystat</h2></div><div class="notice">Jellystat analytics adapter and administrator permission editor are planned but not connected in this release. The existing Jellystat instance remains unchanged.</div>`}catch(e){if(revision!==state.revision)return;document.querySelector('#adminpanel').innerHTML=`<div class="error">${escapeHTML(e.message)}</div>`}}
-function navigate(page){state.revision++;state.page=page;shell();if(page==='home')home();else if(page==='admin')admin();else if(page==='settings')settings();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');else if(page==='music')library('Audio');else if(page==='search')library('Movie');}
-(async()=>{try{state.user=await api('/api/me');navigate('home')}catch{login()}})();
+import { renderAdministration } from './admin.js';
 
-async function settings(){
-  if(!state.user.admin)return navigate('home');
-  const revision=state.revision;
-  content('<h1 class="heading">Connections</h1><div id="settings" class="loader">Loading settings…</div>');
-  const services=['jellyfin','seerr','sonarr','radarr','jellystat','maintainerr'];
-  const keyed=['seerr','sonarr','radarr'];
-  try{
-    const saved=await api('/api/admin/settings');
-    if(revision!==state.revision)return;
-    document.querySelector('#settings').innerHTML=`<p class="muted">Test connections using the current fields, then save to persist changes. Leave a key blank to use its saved value. Jellystat tests reachability only.</p>${saved.storage?.writable===false?`<p class="feedback" data-state="error" role="alert">${escapeHTML(saved.storage.message)}</p>`:''}<form id="logging" class="connection"><h2>Logging</h2><label>Log level<select class="input" name="level">${(saved.logging?.levels||['silent','error','warn','info','debug']).map(level=>`<option value="${level}" ${level===(saved.logging?.level||'info')?'selected':''}>${level}</option>`).join('')}</select></label><p class="muted">Docker logs include request IDs, HTTP status, timing and connection failure hints. Debug adds successful requests. Credentials and response bodies are excluded.</p><button class="ghost">Apply log level</button><p id="log-status" class="feedback" role="status"></p></form><form id="connections">${services.map(name=>`<section class="connection"><h2>${escapeHTML(name)}</h2><label>Service URL<input class="input" name="${name}Url" type="url" required value="${escapeHTML(saved.urls[name+'Url'])}"/></label>${keyed.includes(name)?`<label>API key<input class="input" name="${name}Key" type="password" autocomplete="new-password" placeholder="${saved.keys[name+'Key']?'Saved; leave empty to keep':'Not configured'}"/></label><label class="key-clear"><input type="checkbox" name="clear-${name}Key" ${saved.keys[name+'Key']?'':'disabled'}/><span>Clear saved key</span></label>`:''}<button class="ghost" type="button" data-test="${name}">Test connection</button><div class="connection-result feedback" data-status="${name}" role="status" aria-live="polite"></div></section>`).join('')}<button class="primary">Save settings</button><p id="save-status" class="feedback" role="status"></p></form>`;
-    document.querySelector('#logging').onsubmit=async e=>{
-      e.preventDefault();const btn=e.currentTarget.querySelector('button');const output=document.querySelector('#log-status');btn.disabled=true;output.dataset.state='pending';output.textContent='Applying log level…';
-      try{const result=await api('/api/admin/logging',{method:'PUT',body:JSON.stringify({level:new FormData(e.currentTarget).get('level')})});output.dataset.state=result.persisted?'success':'error';output.textContent=result.persisted?'Log level saved.':result.message}
-      catch(error){output.dataset.state='error';output.textContent=error.message}finally{btn.disabled=false}
-    };
-    document.querySelector('#connections').onsubmit=async e=>{
-      e.preventDefault();const form=e.currentTarget;const btn=form.querySelector('button.primary');btn.disabled=true;
-      const fields=new FormData(form);
-      try{
-        await api('/api/admin/settings',{method:'PUT',body:JSON.stringify({urls:Object.fromEntries(services.map(n=>[n+'Url',fields.get(n+'Url')])),keys:Object.fromEntries(keyed.map(n=>[n+'Key',fields.get(n+'Key')])),clearKeys:keyed.filter(n=>fields.has('clear-'+n+'Key')).map(n=>n+'Key')})});
-        if(revision!==state.revision)return;
-        state.cache.clear();state.removals={};
-        await settings();
-        if(revision===state.revision){document.querySelector('#save-status').dataset.state='success';document.querySelector('#save-status').textContent='Settings saved.'}
-      }catch(error){if(revision===state.revision){document.querySelector('#save-status').dataset.state='error';document.querySelector('#save-status').textContent=error.message}}
-      finally{btn.disabled=false}
-    };
-    document.querySelectorAll('[data-test]').forEach(btn=>btn.onclick=async()=>{
-      const service=btn.dataset.test;const fields=new FormData(document.querySelector('#connections'));
-      btn.disabled=true;const output=document.querySelector(`[data-status="${service}"]`);output.dataset.state='pending';output.textContent='Testing…';
-      try{
-        const result=await api('/api/admin/settings/test',{method:'POST',body:JSON.stringify({service,url:fields.get(service+'Url'),...(keyed.includes(service)?{apiKey:fields.get(service+'Key'),clearKey:fields.has('clear-'+service+'Key')}:{})})});
-        output.dataset.state=result.status==='connected'?'success':'error';
-        output.replaceChildren();const message=document.createElement('p');message.textContent=result.status==='connected'?'Connected':result.message;output.append(message);
-        if(result.diagnostics?.hint){const hint=document.createElement('p');hint.textContent=result.diagnostics.hint;output.append(hint)}
-        if(result.status==='connected'){const note=document.createElement('small');note.textContent='Tested current fields. Save settings to persist changes.';output.append(note)}
-        if(result.diagnostics){const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Connection details';const pre=document.createElement('pre');pre.textContent=Object.entries(result.diagnostics).filter(([,value])=>value!==undefined&&value!==null).map(([key,value])=>`${key}: ${value}`).join('\n');details.append(summary,pre);output.append(details)}
-      }catch(error){output.dataset.state='error';output.textContent=error.message}finally{btn.disabled=false}
-    });
-  }catch(error){if(revision===state.revision)content(`<p class="error">${escapeHTML(error.message)}</p>`)}
+const root=document.querySelector('#app');
+const state={user:null,page:'home',adminTab:'general',cache:new Map(),removals:{},revision:0,branding:{title:'JellyHub',name:'jellyhub.',welcome:'Discover your next favorite.',accent:'#9980ff',favicon:'/favicon.ico'}};
+const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url,opts={}){
+  const response=await fetch(url,{credentials:'same-origin',...opts,headers:{'Content-Type':'application/json',...opts.headers}});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw Error((data.error||'Request failed')+(data.requestId?' [Request '+data.requestId+']':''));
+  return data;
 }
+function cached(key,ttl=45000){
+  const user=state.user,found=state.cache.get(key);
+  if(found&&Date.now()-found.at<ttl)return Promise.resolve(found.value);
+  return api(key).then(value=>{if(state.user===user)state.cache.set(key,{at:Date.now(),value});return value});
+}
+function applyBranding(value){
+  state.branding=value;document.title=value.title;
+  document.documentElement.style.setProperty('--accent',value.accent);
+  document.querySelector('link[rel="icon"]').href=value.favicon;
+  document.querySelectorAll('[data-brand]').forEach(el=>el.textContent=value.name);
+}
+function shell(){
+  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['music','Music'],['search','Search'],...(state.user.admin?[['admin','Administration']]:[])];
+  root.innerHTML=`<div class="layout"><aside class="side"><div class="brand" data-brand>${escapeHTML(state.branding.name)}</div><nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" class="${id===state.page?'active':''}">${label}</button>`).join('')}</nav></aside><main class="main"><header class="top"><div class="topright"><span class="pill">${escapeHTML(state.user.name)}</span><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
+  document.querySelectorAll('[data-nav]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.nav));
+  document.querySelector('#logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{state.revision++;login()}};
+}
+function login(message=''){
+  state.user=null;state.cache.clear();state.removals={};
+  root.innerHTML=`<div class="login"><section class="login-card"><div class="brand" data-brand>${escapeHTML(state.branding.name)}</div><h1>Welcome back.</h1><p>Use your existing Jellyfin account.</p><form id="login"><input class="input" name="username" autocomplete="username" placeholder="Username" required/><input class="input" name="password" type="password" autocomplete="current-password" placeholder="Password" required/><button class="primary">Sign in</button><div class="error" id="login-error">${escapeHTML(message)}</div></form></section></div>`;
+  document.querySelector('#login').onsubmit=async event=>{
+    event.preventDefault();const fields=new FormData(event.currentTarget),btn=event.currentTarget.querySelector('button');btn.disabled=true;
+    try{await api('/api/login',{method:'POST',body:JSON.stringify(Object.fromEntries(fields))});state.user=await api('/api/me');navigate('home')}
+    catch(error){document.querySelector('#login-error').textContent=error.message}finally{btn.disabled=false}
+  };
+}
+const content=html=>document.querySelector('#content').innerHTML=html;
+const errorHTML=error=>`<p class="error">${escapeHTML(error.message)}</p>`;
+function removalBadge(id){const entry=state.removals[id];if(!entry)return '';const days=Math.max(0,Math.ceil((Date.parse(entry.deletionDate)-Date.now())/86400000));return `<span class="removal-badge" title="${escapeHTML(entry.collection)}">${days?days+'d until removal':'Removal due'}</span>`}
+async function loadRemovals(){
+  const revision=state.revision,ids=[...new Set([...document.querySelectorAll('[data-removal-id]')].map(el=>el.dataset.removalId))];if(!ids.length)return;
+  try{const data=await cached('/api/removals?ids='+encodeURIComponent(ids.join(',')),60000);if(revision!==state.revision)return;for(const id of ids)delete state.removals[id];Object.assign(state.removals,data.byId);document.querySelectorAll('[data-removal-id]').forEach(el=>el.innerHTML=removalBadge(el.dataset.removalId))}catch{/* Countdown failures must not block library browsing. */}
+}
+function mediaTile(item){
+  const title=escapeHTML(item.Name||'Unknown');return `<button class="tile" data-item="${escapeHTML(item.Id)}"><div class="poster">${item.ImageTags?.Primary?`<img loading="lazy" src="/api/image/${encodeURIComponent(item.Id)}" alt=""/>`:title.slice(0,1)}<span class="removal-overlay" data-removal-id="${escapeHTML(item.Id)}">${removalBadge(item.Id)}</span></div><div class="tile-info"><div class="title">${title}</div><div class="sub">${escapeHTML(item.ProductionYear||item.Type||'')}</div></div></button>`;
+}
+function catalogTile(item){
+  const label=item.libraryId?'In your library':[2,3].includes(item.status)?'Requested':item.status===5?'Managed by Seerr':'Discover';
+  return `<button class="tile" data-catalog-type="${item.mediaType}" data-catalog-id="${item.id}" ${item.libraryId?`data-item="${escapeHTML(item.libraryId)}"`:''}><div class="poster">${item.posterPath?`<img loading="lazy" src="/api/catalog/image?path=${encodeURIComponent(item.posterPath)}" alt=""/>`:escapeHTML(item.title).slice(0,1)}</div><div class="tile-info"><div class="title">${escapeHTML(item.title)}</div><div class="sub">${escapeHTML(item.year)} · ${item.mediaType==='movie'?'Movie':'TV'}</div><span class="availability">${label}</span></div></button>`;
+}
+function bindTiles(){
+  document.querySelectorAll('[data-item]').forEach(el=>el.onclick=()=>showItem(el.dataset.item));
+  document.querySelectorAll('[data-catalog-id]:not([data-item])').forEach(el=>el.onclick=()=>showCatalog(el.dataset.catalogType,el.dataset.catalogId));
+}
+const section=(title,items,renderer=mediaTile)=>`<section><div class="section-head"><h2>${title}</h2></div>${items.length?`<div class="grid">${items.map(renderer).join('')}</div>`:'<p class="muted">No titles found.</p>'}</section>`;
+const searchForm=query=>`<form id="universal-search" class="universal-search" role="search"><label class="sr-only" for="universal-query">Search movies and shows</label><input class="input" id="universal-query" name="q" type="search" maxlength="120" placeholder="Search movies and shows in your library and beyond" value="${escapeHTML(query)}"/><button class="primary">Search</button></form>`;
+function bindSearch(){document.querySelector('#universal-search').onsubmit=event=>{event.preventDefault();search(new FormData(event.currentTarget).get('q'))}}
+async function home(){
+  const revision=state.revision;
+  content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1><p class="muted">Your library and your next request, in one place.</p>${searchForm('')}</div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="rows"><p class="loader">Loading your library…</p></div>`);bindSearch();
+  await Promise.all([
+    (async()=>{try{const data=await cached('/api/home');if(revision!==state.revision)return;document.querySelector('#rows').innerHTML=section('Continue watching',data.resume)+section('Recently added',data.recent)+(data.errors?.length?`<p class="error">${escapeHTML(data.errors.join('; '))}</p>`:'');bindTiles();loadRemovals()}catch(error){if(revision===state.revision)document.querySelector('#rows').innerHTML=errorHTML(error)}})(),
+    (async()=>{try{const data=await cached('/api/discover');if(revision!==state.revision)return;document.querySelector('#discovery').innerHTML=section('Popular movies',data.movies,catalogTile)+section('Popular shows',data.shows,catalogTile);bindTiles()}catch(error){if(revision===state.revision)document.querySelector('#discovery').innerHTML=`<p class="notice">Recommendations unavailable: ${escapeHTML(error.message)}</p>`}})()
+  ]);
+}
+async function search(query=''){
+  state.page='search';const revision=++state.revision;shell();content(`<h1 class="heading">Search</h1>${searchForm(query)}<div id="search-results">${query?'<p class="loader">Searching…</p>':'<p class="muted">Search your Jellyfin library and Seerr’s movie and TV catalog.</p>'}</div>`);bindSearch();if(!query.trim())return;
+  try{const result=await cached('/api/search?q='+encodeURIComponent(query));if(revision!==state.revision)return;document.querySelector('#search-results').innerHTML=section('In your library',result.library)+section('Discover & request',result.catalog.filter(i=>!i.libraryId),catalogTile)+result.errors.map(error=>`<p class="notice">${escapeHTML(error.source)}: ${escapeHTML(error.message)}</p>`).join('');bindTiles();loadRemovals()}
+  catch(error){if(revision===state.revision)document.querySelector('#search-results').innerHTML=errorHTML(error)}
+}
+async function library(type,query=''){
+  const revision=++state.revision,label={Movie:'Movies',Series:'TV Shows',Audio:'Music'}[type];
+  content(`<h1 class="heading">${label}</h1><form id="library-filter" class="bar"><label class="sr-only" for="filter">Search ${label}</label><input class="input" id="filter" name="q" placeholder="Search ${label.toLowerCase()}" value="${escapeHTML(query)}"/><button class="primary">Search</button></form><div id="items"><p class="loader">Loading…</p></div>`);
+  document.querySelector('#library-filter').onsubmit=event=>{event.preventDefault();library(type,new FormData(event.currentTarget).get('q'))};
+  try{const data=await cached('/api/items?type='+type+'&q='+encodeURIComponent(query));if(revision!==state.revision)return;document.querySelector('#items').innerHTML=`<div class="grid">${(data.Items||[]).map(mediaTile).join('')}</div>`;bindTiles();loadRemovals()}
+  catch(error){if(revision===state.revision)document.querySelector('#items').innerHTML=errorHTML(error)}
+}
+async function showItem(id){
+  const revision=++state.revision;state.page='detail';shell();content('<p class="loader">Loading details…</p>');
+  try{const item=await cached('/api/item/'+encodeURIComponent(id),30000);if(revision!==state.revision)return;content(`<button class="ghost" id="back">← Back</button><div class="detail"><div class="poster">${item.ImageTags?.Primary?`<img src="/api/image/${encodeURIComponent(item.Id)}" alt="${escapeHTML(item.Name)} poster"/>`:escapeHTML(item.Name).slice(0,1)}</div><div><div class="eyebrow">${escapeHTML(item.Type)}</div><h1 class="heading">${escapeHTML(item.Name)}</h1><div class="muted">${escapeHTML(item.ProductionYear||'')} ${item.RunTimeTicks?'· '+Math.round(item.RunTimeTicks/600000000)+' min':''}</div><div class="detail-removal" data-removal-id="${escapeHTML(item.Id)}"></div><p>${escapeHTML(item.Overview||'No description available.')}</p><div class="notice">Playback is not implemented in this prototype. Continue watching in your existing Jellyfin client.</div></div></div>`);document.querySelector('#back').onclick=()=>navigate('home');loadRemovals()}
+  catch(error){if(revision===state.revision)content(errorHTML(error))}
+}
+async function showCatalog(type,id){
+  const revision=++state.revision;state.page='detail';shell();content('<p class="loader">Loading details…</p>');
+  try{
+    const item=await api(`/api/catalog/${type}/${id}`);if(revision!==state.revision)return;
+    if(item.libraryId)return showItem(item.libraryId);
+    const blocked=type==='movie'&&[2,3,5].includes(item.status);
+    content(`<button class="ghost" id="back">← Home</button><div class="detail"><div class="poster">${item.posterPath?`<img src="/api/catalog/image?path=${encodeURIComponent(item.posterPath)}" alt="${escapeHTML(item.title)} poster"/>`:escapeHTML(item.title).slice(0,1)}</div><div><div class="eyebrow">${type==='movie'?'Movie':'TV Show'}</div><h1 class="heading">${escapeHTML(item.title)}</h1><p class="muted">${escapeHTML(item.year)}</p><p>${escapeHTML(item.overview)}</p><form id="request-form">${type==='tv'?`<fieldset class="season-options"><legend>Seasons to request</legend>${item.seasons.map(season=>`<label class="key-clear"><input type="checkbox" name="season" value="${season.number}" ${season.requested?'disabled':''}/><span>${escapeHTML(season.name)}${season.requested?' · Already requested/available':''}</span></label>`).join('')||'<p>No seasons available.</p>'}</fieldset>`:''}<button class="primary" ${!item.canRequest||blocked?'disabled':''}>${blocked?'Already requested or available':'Request '+(type==='movie'?'movie':'selected seasons')}</button>${!item.canRequest?'<p class="muted">Your Seerr account does not have request permission.</p>':''}<p id="request-status" class="feedback" role="status"></p></form></div></div>`);
+    document.querySelector('#back').onclick=()=>navigate('home');
+    document.querySelector('#request-form').onsubmit=async event=>{
+      event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button'),output=document.querySelector('#request-status');btn.disabled=true;output.textContent='Submitting…';output.dataset.state='pending';
+      try{const result=await api('/api/requests',{method:'POST',body:JSON.stringify({mediaType:type,mediaId:Number(id),...(type==='tv'?{seasons:new FormData(form).getAll('season').map(Number)}:{})})});state.cache.clear();output.dataset.state='success';output.textContent=result.status===1?'Request submitted for approval.':'Request submitted.';btn.textContent='Requested'}
+      catch(error){output.dataset.state='error';output.textContent=error.message;btn.disabled=false}
+    };
+  }catch(error){if(revision===state.revision)content(errorHTML(error))}
+}
+function navigate(page){
+  state.revision++;state.page=page;shell();
+  if(page==='home')home();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');else if(page==='music')library('Audio');else if(page==='search')search();
+  else if(page==='admin'&&state.user.admin)renderAdministration({state,api,escapeHTML,applyBranding,navigate});
+}
+(async()=>{
+  try{applyBranding(await api('/api/branding'))}catch{/* Keep defaults if branding is unavailable. */}
+  try{state.user=await api('/api/me');navigate('home')}catch{login()}
+})();

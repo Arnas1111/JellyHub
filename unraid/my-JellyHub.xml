@@ -8,7 +8,7 @@
   <Privileged>false</Privileged>
   <Project>https://github.com/Arnas1111/JellyHub</Project>
   <Support>https://github.com/Arnas1111/JellyHub/issues</Support>
-  <Overview>Independent Jellyfin frontend development preview. Configure integrations and log level in Connections. Playback is not implemented. Startup initializes JellyHub appdata ownership, then runs as UID 1000.</Overview>
+  <Overview>Independent Jellyfin frontend development preview. Administration tabs configure integrations, users, branding and logging. Home includes Seerr discovery and requests. Playback is not implemented. Startup initializes JellyHub appdata ownership, then runs as UID 1000.</Overview>
   <Category>MediaServer:Other</Category>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
   <Config Name="Web UI Port" Target="3000" Default="3100" Mode="tcp" Description="Host port for the web UI." Type="Port" Display="always" Required="true" Mask="false">3100</Config>

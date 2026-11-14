@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createLogger, logLevels, requestContext, upstreamFailure } from './diagnostics.js';
+import { brandingDefaults, createFeatures } from './features.js';
 
 const port = Number(process.env.PORT || 3000);
 // Runtime settings: service addresses default to the user's existing Docker names.
@@ -12,6 +13,7 @@ const port = Number(process.env.PORT || 3000);
 const configDir=process.env.CONFIG_DIR || '/config';
 const configFile=path.join(configDir,'settings.json');
 const defaults={
+  ...brandingDefaults,
   jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
   seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
   sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
@@ -60,11 +62,17 @@ async function storageStatus(){
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(probe,'',{mode:0o600,flag:'wx'});await fs.rm(probe);return {writable:true}}
   catch(error){await fs.rm(probe,{force:true}).catch(()=>{});return {writable:false,code:error.code,message:storageFailure(error).message}}
 }
-async function saveConfig(next){
+let configSaveQueue=Promise.resolve();
+async function saveConfig(patch){
+  const previous=configSaveQueue;let release;configSaveQueue=new Promise(resolve=>release=resolve);
+  await previous;
+  try{
+  const next={...config,...patch};
   const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});logger.log('error','settings.save_failed',{code:e.code,configDir});throw storageFailure(e)}
   config=next;refreshIntegrations();
   logger.setLevel(next.logLevel);logger.log('info','settings.saved');
+  }finally{release()}
 }
 // Read-only Maintainerr adapter; never expose Maintainerr API directly to browsers.
 // Its documented API has no native authentication. Cached results reduce load.
@@ -133,15 +141,17 @@ async function upstream(base, route, {headers={},method='GET',body,timeout=8000,
   } finally {clearTimeout(timer)}
 }
 const jf=(route,s,opts={})=>upstream(jellyfin(),route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
-async function readBody(req){let raw='';for await(const part of req){raw+=part;if(Buffer.byteLength(raw)>MAX_BODY)throw Object.assign(new Error('Request too large'),{status:413})}try{return JSON.parse(raw||'{}')}catch{throw Object.assign(new Error('Invalid JSON'),{status:400})}}
+async function readBody(req,limit=MAX_BODY){let raw='';for await(const part of req){raw+=part;if(Buffer.byteLength(raw)>limit)throw Object.assign(new Error('Request too large'),{status:413})}let data;try{data=JSON.parse(raw||'{}')}catch{throw Object.assign(new Error('Invalid JSON'),{status:400})}if(!data||typeof data!=='object'||Array.isArray(data))throw Object.assign(new Error('JSON body must be an object'),{status:400});return data}
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
+const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,json,readBody,cleanId,send});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
     const origin=req.headers.origin;
     if(origin && origin!==`http://${req.headers.host}` && origin!==`https://${req.headers.host}`) return json(res,403,{error:'Origin rejected'});
   }
+  if(await featureAPI(req,res,url,null))return;
   if(url.pathname==='/api/login' && method==='POST'){
     const ip=req.socket.remoteAddress||'unknown';const entry=attempts.get(ip)||{n:0,until:0};
     if(entry.n>=8&&Date.now()<entry.until)return json(res,429,{error:'Too many login attempts'});
@@ -164,6 +174,7 @@ const api = async(req,res,url)=>{
     s.admin=!!verified.Policy?.IsAdministrator;
     adminOnly(s);
   }
+  if(await featureAPI(req,res,url,s))return;
   if(url.pathname==='/api/logout' && method==='POST'){
     sessions.delete(sid);
     jf('Sessions/Logout',s,{method:'POST'}).catch(()=>{});
@@ -178,7 +189,7 @@ const api = async(req,res,url)=>{
     const {level}=await readBody(req);
     if(!logLevels.includes(level))return json(res,400,{error:'Invalid log level'});
     logger.setLevel(level);
-    try{await saveConfig({...config,logLevel:level});return json(res,200,{level,persisted:true})}
+    try{await saveConfig({logLevel:level});return json(res,200,{level,persisted:true})}
     catch(error){return json(res,200,{level,persisted:false,message:`Log level applied for this process only. ${error.message}`})}
   }
   if(url.pathname.startsWith('/api/admin/settings')){
@@ -189,7 +200,7 @@ const api = async(req,res,url)=>{
     if(url.pathname==='/api/admin/settings'&&method==='PUT'){
       const incoming=await readBody(req);
       if(!incoming||typeof incoming!=='object'||Array.isArray(incoming)||!incoming.urls||!incoming.keys)return json(res,400,{error:'Invalid settings payload'});
-      const next={...config,logLevel:logger.level};
+      const next={logLevel:logger.level};
       for(const k of settingUrls){
         if(!Object.hasOwn(incoming.urls,k))continue;
         const v=incoming.urls[k];
@@ -282,7 +293,9 @@ const api = async(req,res,url)=>{
       ['sonarr', `${(integrations.sonarr.prefix||'').replace(/^\//,'')}/queue?page=1&pageSize=20`,{'X-Api-Key':integrations.sonarr.key}],
       ['radarr', `${(integrations.radarr.prefix||'').replace(/^\//,'')}/queue?page=1&pageSize=20`,{'X-Api-Key':integrations.radarr.key}]
     ];
-    const values=await Promise.all(specs.map(async([name,route,headers])=>{
+    const selectedService=url.searchParams.get('service');
+    if(selectedService&&!specs.some(([name])=>name===selectedService))return json(res,400,{error:'Unknown integration'});
+    const values=await Promise.all(specs.filter(([name])=>!selectedService||selectedService===name).map(async([name,route,headers])=>{
       const c=integrations[name];if(!c.url||!c.key)return {name,status:'not configured'};
       try {const data=await upstream(c.url,route,{headers});return {name,status:'connected',data:name==='seerr'?{requests:(data.results||[]).slice(0,12),total:data.pageInfo?.results??0}:{records:(data.records||[]).slice(0,12),total:data.totalRecords??0}}}catch(e){return {name,status:'error',message:e.message}}
     }));
@@ -300,6 +313,7 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
   res.on('finish',()=>logger.log('debug','request.completed',{method:req.method,path:(req.url||'').split('?')[0],status:res.statusCode,durationMs:Date.now()-started}));
   try {
     const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
+    if(url.pathname==='/favicon.ico'&&await featureAPI(req,res,url,null))return;
     if(url.pathname==='/healthz' && ['GET','HEAD'].includes(req.method))return json(res,200,{status:'ok'});
     if(url.pathname.startsWith('/api/'))return await api(req,res,url);
     if(req.method!=='GET'&&req.method!=='HEAD')return send(res,405,'Method not allowed');

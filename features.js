@@ -1,0 +1,175 @@
+import crypto from 'node:crypto';
+
+export const brandingDefaults={brandingTitle:'JellyHub',brandingName:'jellyhub.',brandingWelcome:'Discover your next favorite.',brandingAccent:'#9980ff',brandingFavicon:''};
+export const editablePolicies=['IsAdministrator','IsDisabled','IsHidden','EnableRemoteAccess','EnableMediaPlayback','EnableContentDownloading','EnableAudioPlaybackTranscoding','EnableVideoPlaybackTranscoding','EnableAllFolders'];
+const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
+const normalizedId=id=>String(id||'').replaceAll('-','').toLowerCase();
+const numberId=id=>{const value=Number(id);if(!Number.isSafeInteger(value)||value<1)fail(400,'Invalid media ID');return value};
+const userDto=user=>({id:user.Id,name:user.Name,policy:Object.fromEntries([...editablePolicies,'EnabledFolders'].map(k=>[k,user.Policy?.[k]??(k==='EnabledFolders'?[]:false)])),lastLogin:user.LastLoginDate||null});
+const canRequest=(permissions,type)=>[2,32,type==='movie'?262144:524288].some(bit=>(permissions&bit)!==0);
+
+function validateIcon(data){
+  if(typeof data!=='string'||!/^[A-Za-z0-9+/]+={0,2}$/.test(data))fail(400,'Upload a PNG or ICO favicon.');
+  const bytes=Buffer.from(data,'base64');
+  if(bytes.length>65536)fail(413,'Favicon must be at most 64 KiB.');
+  if(bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))&&bytes.length>=33&&bytes.toString('ascii',12,16)==='IHDR'){
+    const width=bytes.readUInt32BE(16),height=bytes.readUInt32BE(20);
+    if(width<1||height<1||width>512||height>512)fail(400,'PNG favicon dimensions must be between 1 and 512 pixels.');
+    return `data:image/png;base64,${bytes.toString('base64')}`;
+  }
+  if(bytes.length>=22&&bytes.readUInt32LE(0)===65536){
+    const count=bytes.readUInt16LE(4);
+    if(count<1||count>64||bytes.length<6+count*16)fail(400,'Invalid ICO directory.');
+    for(let i=0;i<count;i++){
+      const size=bytes.readUInt32LE(6+i*16+8),offset=bytes.readUInt32LE(6+i*16+12);
+      if(size<1||offset<6+count*16||offset+size>bytes.length)fail(400,'Invalid ICO image data.');
+    }
+    return `data:image/x-icon;base64,${bytes.toString('base64')}`;
+  }
+  fail(400,'Only PNG and ICO favicons are supported. SVG and HTML uploads are not accepted.');
+}
+
+export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,cleanId,send}){
+  const branding=()=>{
+    const c=getConfig();return {title:c.brandingTitle,name:c.brandingName,welcome:c.brandingWelcome,accent:c.brandingAccent,favicon:'/favicon.ico?v='+crypto.createHash('sha256').update(c.brandingFavicon).digest('hex').slice(0,12)};
+  };
+  const seerr=(route,headers={},opts={})=>{
+    const c=getConfig();if(!c.seerrKey)fail(503,'Configure the Seerr API key under Administration → Seerr.');
+    return upstream(c.seerrUrl,'api/v1/'+route,{...opts,headers:{'X-Api-Key':c.seerrKey,...headers,...(opts.body?{'Content-Type':'application/json'}:{})}});
+  };
+  async function seerrIdentity(session){
+    // Resolve by immutable Jellyfin ID; never accept a browser-supplied Seerr user ID.
+    let mapped;
+    try{mapped=await seerr('user/jellyfin/'+encodeURIComponent(session.id))}
+    catch(error){if(error.status===404)fail(403,'No matching Seerr account. Sign into Seerr with this Jellyfin account or ask an administrator to import it.');throw error}
+    if(!Number.isSafeInteger(mapped?.id)||normalizedId(mapped.jellyfinUserId)!==normalizedId(session.id))fail(403,'Seerr did not return a matching Jellyfin account.');
+    const headers={'X-Api-User':String(mapped.id)};
+    const current=await seerr('auth/me',headers);
+    if(current?.id!==mapped.id||normalizedId(current.jellyfinUserId)!==normalizedId(session.id))fail(403,'Seerr user impersonation could not be verified. Update Seerr before enabling requests.');
+    return {headers,permissions:Number(current.permissions)||0};
+  }
+  function catalogItem(item,type,permissions){
+    const status=Number(item.mediaInfo?.status)||1;
+    return {id:item.id,mediaType:type,title:item.title||item.name||'Untitled',overview:item.overview||'',year:(item.releaseDate||item.firstAirDate||'').slice(0,4),posterPath:/^\/[\w-]+\.(jpg|png)$/.test(item.posterPath||'')?item.posterPath:null,status,canRequest:canRequest(permissions,type)};
+  }
+  async function libraryMatches(session,ids){
+    if(!ids.length)return [];
+    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',Limit:'100',Fields:'ProviderIds,ProductionYear',AnyProviderIdEquals:ids.map(id=>'tmdb.'+id).join(',')});
+    return (await jf(`Users/${session.id}/Items?${q}`,session)).Items||[];
+  }
+  function attachLibrary(items,library){
+    return items.map(item=>{const match=library.find(local=>String(local.ProviderIds?.Tmdb)===String(item.id)&&local.Type===(item.mediaType==='movie'?'Movie':'Series'));return {...item,libraryId:match?.Id||null}});
+  }
+  const pendingRequests=new Set();
+  return async function handle(req,res,url,session){
+    const route=url.pathname,method=req.method;
+    if(route==='/api/branding'&&method==='GET'){json(res,200,branding());return true}
+    if(route==='/favicon.ico'&&['GET','HEAD'].includes(method)){
+      const icon=getConfig().brandingFavicon;
+      if(icon){const [meta,data]=icon.split(',');send(res,200,Buffer.from(data,'base64'),{'Content-Type':meta.includes('image/png')?'image/png':'image/x-icon'});return true}
+      send(res,200,'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171e2c"/><text x="15" y="46" fill="#9980ff" font-family="sans-serif" font-size="48">j</text></svg>',{'Content-Type':'image/svg+xml'});return true;
+    }
+    if(!session)return false;
+    if(route==='/api/admin/branding'){
+      if(method==='GET'){json(res,200,branding());return true}
+      if(method!=='PUT')fail(405,'Method not allowed');
+      const input=await readBody(req),patch={};
+      for(const [key,target,max] of [['title','brandingTitle',80],['name','brandingName',40],['welcome','brandingWelcome',160]]){
+        if(typeof input[key]!=='string'||!input[key].trim()||input[key].length>max)fail(400,`Invalid ${key}; enter 1–${max} characters.`);
+        patch[target]=input[key].trim();
+      }
+      if(!/^#[\da-f]{6}$/i.test(input.accent||''))fail(400,'Choose a valid accent color.');
+      patch.brandingAccent=input.accent;
+      await saveConfig(patch);json(res,200,branding());return true;
+    }
+    if(route==='/api/admin/branding/favicon'){
+      if(method==='DELETE')await saveConfig({brandingFavicon:''});
+      else if(method==='PUT'){const {data}=await readBody(req,100000);await saveConfig({brandingFavicon:validateIcon(data)})}
+      else fail(405,'Method not allowed');
+      json(res,200,branding());return true;
+    }
+    if(route==='/api/admin/users'&&method==='GET'){
+      const [users,folders]=await Promise.all([jf('Users',session),jf('Library/VirtualFolders',session)]);
+      json(res,200,{users:users.map(userDto),libraries:folders.map(f=>({id:f.ItemId,name:f.Name}))});return true;
+    }
+    const userRoute=route.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if(userRoute&&method==='PUT'){
+      const id=cleanId(userRoute[1]),input=await readBody(req);
+      if(typeof input.name!=='string'||!input.name.trim()||input.name.length>128||!input.policy||Array.isArray(input.policy))fail(400,'Enter a user name and valid policy.');
+      const current=await jf('Users/'+id,session),policy={...current.Policy};
+      for(const [key,value] of Object.entries(input.policy)){
+        if(editablePolicies.includes(key)&&typeof value==='boolean')policy[key]=value;
+        else if(key==='EnabledFolders'&&Array.isArray(value)&&value.length<=200&&value.every(x=>typeof x==='string'))policy.EnabledFolders=value.map(cleanId);
+        else fail(400,'Unsupported user policy field: '+key);
+      }
+      if(normalizedId(id)===normalizedId(session.id)&&(policy.IsDisabled||!policy.IsAdministrator))fail(400,'Use another administrator account to disable or demote your current account.');
+      if(policy.IsAdministrator&&policy.IsDisabled)fail(400,'An administrator cannot be disabled.');
+      if(current.Policy?.IsAdministrator&&!policy.IsAdministrator){const users=await jf('Users',session);if(users.filter(u=>u.Policy?.IsAdministrator&&!u.Policy?.IsDisabled).length<=1)fail(400,'Keep at least one enabled administrator.')}
+      const folders=await jf('Library/VirtualFolders',session);
+      if((policy.EnabledFolders||[]).some(id=>!folders.some(f=>f.ItemId===id)))fail(400,'A selected library no longer exists. Refresh Users and try again.');
+      // Keep Configuration intact: Jellyfin's rename endpoint also updates it.
+      // Only update policy here; name is a separate, explicit save to avoid partial edits.
+      if(input.name.trim()!==current.Name)fail(400,'Name changes use the separate Rename action. Save permissions first.');
+      await jf(`Users/${id}/Policy`,session,{method:'POST',body:policy});
+      json(res,200,{ok:true});return true;
+    }
+    const rename=route.match(/^\/api\/admin\/users\/([^/]+)\/name$/);
+    if(rename&&method==='PUT'){
+      const id=cleanId(rename[1]),input=await readBody(req);
+      if(typeof input.name!=='string'||!input.name.trim()||input.name.length>128)fail(400,'Enter a user name of 1–128 characters.');
+      const current=await jf('Users/'+id,session);
+      await jf('Users/'+id,session,{method:'POST',body:{...current,Name:input.name.trim()}});
+      json(res,200,{ok:true});return true;
+    }
+    if(route==='/api/search'&&method==='GET'){
+      const query=(url.searchParams.get('q')||'').trim().slice(0,120);if(!query){json(res,200,{library:[],catalog:[],errors:[]});return true}
+      const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,Limit:'60',Fields:'ProviderIds,ProductionYear,Overview'});
+      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:'1'}),identity.headers);return (found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions))})()]);
+      const library=results[0].status==='fulfilled'?results[0].value.Items||[]:[];
+      const catalog=results[1].status==='fulfilled'?attachLibrary(results[1].value,library):[];
+      json(res,200,{library,catalog,errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
+    }
+    if(route==='/api/discover'&&method==='GET'){
+      const identity=await seerrIdentity(session);
+      const [movies,shows]=await Promise.all(['movies','tv'].map(type=>seerr(`discover/${type}?page=1&sortBy=popularity.desc`,identity.headers)));
+      const items=[...(movies.results||[]).map(i=>catalogItem(i,'movie',identity.permissions)),...(shows.results||[]).map(i=>catalogItem(i,'tv',identity.permissions))];
+      const library=await libraryMatches(session,items.map(i=>i.id));
+      const tagged=attachLibrary(items,library);json(res,200,{movies:tagged.filter(i=>i.mediaType==='movie'),shows:tagged.filter(i=>i.mediaType==='tv')});return true;
+    }
+    const mediaRoute=route.match(/^\/api\/catalog\/(movie|tv)\/(\d+)$/);
+    if(mediaRoute&&method==='GET'){
+      const type=mediaRoute[1],id=numberId(mediaRoute[2]),identity=await seerrIdentity(session);
+      const item=await seerr(`${type}/${id}`,identity.headers);
+      const result=attachLibrary([catalogItem(item,type,identity.permissions)],await libraryMatches(session,[id]))[0];
+      const seasonStatus=new Map((item.mediaInfo?.seasons||[]).map(s=>[s.seasonNumber,Number(s.status)]));
+      json(res,200,{...result,seasons:(item.seasons||[]).filter(s=>s.seasonNumber>0).map(s=>({number:s.seasonNumber,name:s.name||'Season '+s.seasonNumber,requested:[2,3,5].includes(seasonStatus.get(s.seasonNumber))}))});return true;
+    }
+    if(route==='/api/requests'&&method==='POST'){
+      const input=await readBody(req),type=input.mediaType,id=numberId(input.mediaId);
+      if(!['movie','tv'].includes(type))fail(400,'Invalid media type');
+      if(Object.keys(input).some(k=>!['mediaType','mediaId','seasons'].includes(k)))fail(400,'Unsupported request field');
+      const identity=await seerrIdentity(session);
+      if(!canRequest(identity.permissions,type))fail(403,'Your Seerr account does not have permission to request this media type.');
+      const body={mediaType:type,mediaId:id};
+      if(type==='tv'){
+        if(!Array.isArray(input.seasons)||!input.seasons.length||input.seasons.length>100||input.seasons.some(n=>!Number.isSafeInteger(n)||n<1))fail(400,'Select at least one valid season.');
+        const detail=await seerr(`tv/${id}`,identity.headers);
+        if(input.seasons.some(n=>!detail.seasons?.some(s=>s.seasonNumber===n)))fail(400,'Unknown season selected');
+        body.seasons=[...new Set(input.seasons)];
+      }
+      const key=session.id+':'+type+':'+id;if(pendingRequests.has(key))fail(409,'A request for this title is already being submitted.');
+      pendingRequests.add(key);
+      try{const result=await seerr('request',identity.headers,{method:'POST',body});json(res,201,{id:result.id,status:result.status})}
+      catch(error){if([403,429].includes(error.status))fail(error.status,`Seerr rejected the request (HTTP ${error.status}). Check your request permissions and quota in Seerr.`);throw error}
+      finally{pendingRequests.delete(key)}
+      return true;
+    }
+    if(route==='/api/catalog/image'&&method==='GET'){
+      const imagePath=url.searchParams.get('path');if(!/^\/[\w-]+\.(jpg|png)$/.test(imagePath||''))fail(400,'Invalid poster path');
+      const image=await fetch('https://image.tmdb.org/t/p/w342'+imagePath,{signal:AbortSignal.timeout(6000),redirect:'error'});
+      if(!image.ok)fail(404,'Poster unavailable');
+      send(res,200,Buffer.from(await image.arrayBuffer()),{'Content-Type':'image/jpeg','Cache-Control':'private, max-age=3600'});return true;
+    }
+    return false;
+  };
+}
