@@ -29,7 +29,7 @@ try{
   const screenshot=process.env.SCREENSHOT_PATH;if(screenshot)await page.screenshot({path:screenshot,fullPage:true});
   await page.getByRole('button',{name:'Return to details',exact:true}).click();await page.getByRole('heading',{name:'Direct Test Movie',exact:true}).waitFor();
   assert.ok(fixture.reports.some(report=>report.path==='/Sessions/Playing/Stopped'));assert.ok(fixture.calls.some(call=>call.path==='/Videos/ActiveEncodings'&&call.method==='DELETE'));
-  await page.goto(fixture.base+'/#item/episode1');await page.getByRole('button',{name:'Resume',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.main-video')?.videoWidth>0);
+  await page.goto(fixture.base+'/#item/episode1');await page.getByRole('heading',{name:'The pilot',exact:true}).waitFor();await page.getByRole('button',{name:'Resume',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.main-video')?.videoWidth>0);
   await page.getByRole('button',{name:'Episodes',exact:true}).click();await page.getByLabel('Episode season',{exact:true}).selectOption('season1');await page.locator('[data-episode="episode2"]').waitFor();
   await page.getByRole('button',{name:'Close panel',exact:true}).click();const beforeEnd=fixture.reports.filter(report=>report.path==='/Sessions/Playing/Stopped').length;
   await page.locator('.main-video').evaluate(video=>{video.currentTime=video.duration-.3;video.play()});await page.waitForFunction(()=>document.querySelector('.main-video')?.ended);await page.getByRole('button',{name:'Cancel autoplay',exact:true}).click();
