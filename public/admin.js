@@ -1,4 +1,4 @@
-const tabs=[['general','General'],['users','Users'],['branding','Branding'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
+const tabs=[['general','General'],['users','Users'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
 const policyLabels={IsAdministrator:'Administrator',IsDisabled:'Disable account',IsHidden:'Hide from login screen',EnableRemoteAccess:'Allow remote access',EnableMediaPlayback:'Allow playback',EnableContentDownloading:'Allow downloads',EnableAudioPlaybackTranscoding:'Allow audio transcoding',EnableVideoPlaybackTranscoding:'Allow video transcoding',EnableAllFolders:'Allow all libraries'};
 
 export async function renderAdministration(ctx){
@@ -10,7 +10,20 @@ export async function renderAdministration(ctx){
   const panel=document.querySelector('#admin-content');
   const feedback=(el,text,status='error')=>{el.dataset.state=status;el.textContent=text};
   try{
+    if(tab==='plugins'){
+      const data=await api('/api/admin/plugins');if(!current())return;
+      panel.innerHTML=`<h2>Plugin compatibility</h2><p class="notice">${e(data.note)}</p><div class="plugin-table">${data.compatibility.map(p=>`<article class="connection"><h3>${e(p.name)}</h3><p>${p.installed?'Installed '+e(p.installed.version)+' · '+e(p.installed.status||'Unknown status'):'Not reported by this server'}</p><p class="muted">${e(p.handling)}</p></article>`).join('')}</div><h2>Other installed plugins</h2>${data.plugins.filter(p=>!data.compatibility.some(c=>c.installed?.id===p.id)).map(p=>`<p>${e(p.name)} · ${e(p.version)} · ${e(p.status||'')}</p>`).join('')||'<p class="muted">None.</p>'}`;return;
+    }
+    if(tab==='navigation'){
+      const data=await api('/api/admin/navigation');if(!current())return;
+      panel.innerHTML=`<h2>Custom navigation</h2><p class="muted">Add links to independent services. Each service keeps its own login. Native extension pages are registered by modules shipped with the image.</p><form id="navigation-form"><div id="navigation-links"></div><button type="button" class="ghost" id="add-navigation">Add link</button><button class="primary">Save navigation</button><p class="feedback" role="status"></p></form>`;
+      const container=panel.querySelector('#navigation-links'),links=data.links;
+      function draw(){container.innerHTML=links.map((link,index)=>`<fieldset class="connection"><legend>Link ${index+1}</legend><label>Title<input class="input" data-field="title" data-index="${index}" maxlength="40" required value="${e(link.title)}"/></label><label>URL<input class="input" data-field="url" data-index="${index}" type="url" required value="${e(link.url)}"/></label><label>Visible to<select class="input" data-field="role" data-index="${index}"><option value="all" ${link.role==='all'?'selected':''}>All users</option><option value="admin" ${link.role==='admin'?'selected':''}>Administrators</option></select></label><button class="ghost" type="button" data-remove="${index}">Remove link</button></fieldset>`).join('');container.querySelectorAll('[data-field]').forEach(input=>input.oninput=()=>links[Number(input.dataset.index)][input.dataset.field]=input.value);container.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>{links.splice(Number(button.dataset.remove),1);draw()})}draw();
+      panel.querySelector('#add-navigation').onclick=()=>{if(links.length<20){links.push({id:'link-'+crypto.randomUUID(),title:'',url:'',role:'admin'});draw()}};
+      panel.querySelector('#navigation-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,output=form.querySelector('.feedback');try{await api('/api/admin/navigation',{method:'PUT',body:JSON.stringify({links})});const data=await api('/api/navigation');state.navigation=data.links;feedback(output,'Navigation saved.','success')}catch(error){feedback(output,error.message)}};return;
+    }
     if(tab==='users'){
+
       const data=await api('/api/admin/users');if(!current())return;
       panel.innerHTML=`<h2>Jellyfin users</h2><p class="muted">Manage existing accounts and library access. Changes apply to Jellyfin when you save.</p><div class="user-layout"><div class="user-list" aria-label="Users">${data.users.map(u=>`<button class="ghost" data-user="${e(u.id)}">${e(u.name)}<small>${u.policy.IsAdministrator?'Administrator':u.policy.IsDisabled?'Disabled':'User'}</small></button>`).join('')}</div><div id="user-editor"><p class="muted">Select a user.</p></div></div>`;
       function edit(user){

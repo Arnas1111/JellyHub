@@ -1,0 +1,21 @@
+import {chromium} from 'playwright';
+import assert from 'node:assert/strict';
+import {startPlaybackFixture} from './mock-jellyfin.mjs';
+const fixture=await startPlaybackFixture();let browser;
+try{
+  browser=await chromium.launch(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{});const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(fixture.base);await page.getByPlaceholder('Username').fill('viewer');await page.getByPlaceholder('Password',{exact:true}).fill('test');await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.getByRole('button',{name:'Movies',exact:true}).click();await page.locator('#library-total').filter({hasText:'2 titles'}).waitFor();
+  await page.getByLabel('Sort titles').selectOption('CommunityRating');await page.getByLabel('Sort direction').selectOption('desc');await page.getByLabel('Genre',{exact:true}).selectOption('Test');await page.getByRole('button',{name:'Apply',exact:true}).click();await page.locator('#library-total').filter({hasText:'2 titles'}).waitFor();
+  assert.ok(fixture.calls.some(call=>call.query.SortBy==='CommunityRating'&&call.query.SortOrder==='Descending'&&call.query.Genres==='Test'));
+  await page.getByRole('button',{name:'Actions for Direct Test Movie'}).last().click();await page.getByRole('button',{name:'Add to My list',exact:true}).click();await page.getByRole('button',{name:'My list',exact:true}).click();await page.locator('#library-total').filter({hasText:'1 titles'}).waitFor();
+  await page.getByRole('button',{name:'Actions for Direct Test Movie'}).click();await page.getByRole('button',{name:'Hide from browsing',exact:true}).click();await page.getByRole('heading',{name:'No titles match.',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Viewer',exact:true}).click();await page.getByRole('heading',{name:'Playback & appearance',exact:true}).waitFor();await page.getByLabel('Automatically skip intros and recaps').check();await page.getByLabel('Subtitle size (%)').fill('130');await page.getByRole('button',{name:'Save preferences',exact:true}).click();await page.locator('#preferences .feedback').filter({hasText:'Saved.'}).waitFor();
+  const prefs=await page.evaluate(()=>fetch('/api/preferences').then(response=>response.json()));assert.equal(prefs.autoSkipIntro,true);assert.equal(prefs.subtitleSize,130);
+  await page.getByRole('button',{name:'Restore',exact:true}).click();await page.getByRole('button',{name:'Collections',exact:true}).click();await page.locator('[data-item="collection"]').click();await page.getByRole('heading',{name:'Test Collection',exact:true}).waitFor();await page.locator('#library-total').filter({hasText:'2 titles'}).waitFor();
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile layout must not overflow horizontally');
+  await page.getByRole('button',{name:'Home',exact:true}).click();await page.goBack();await page.getByRole('heading',{name:'Test Collection',exact:true}).waitFor();await page.reload();await page.getByRole('heading',{name:'Test Collection',exact:true}).waitFor();
+  await page.evaluate(async()=>{const {registerPage,pagesFor}=await import('/extensions.js');registerPage({id:'extension-test',title:'Native test',role:'all',mount({root,user}){root.textContent='Native page for '+user.name;return ()=>window.extensionDisposed=true}});registerPage({id:'extension-admin',title:'Admin extension',role:'admin',mount(){}});if(pagesFor({admin:false}).some(page=>page.id==='extension-admin'))throw Error('Admin extension leaked')});
+  await page.getByRole('button',{name:'Home',exact:true}).click();await page.getByRole('button',{name:'Native test',exact:true}).click();await page.getByText('Native page for Viewer',{exact:true}).waitFor();await page.getByRole('button',{name:'Home',exact:true}).click();assert.equal(await page.evaluate(()=>window.extensionDisposed),true);
+  assert.deepEqual(errors,[]);console.log('Library/account browser checks passed: sorting, filters, favorites, hide/restore, collections, durable preferences and mobile layout. Real app with simulated Jellyfin.');
+}finally{await browser?.close();await fixture.close()}

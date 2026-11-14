@@ -23,7 +23,7 @@ Other fixes: static assets resolve relative to the server file instead of the sh
 | Maintainerr card/detail countdowns | Browser detail test; HTTP date arithmetic, cache, inactive collection and user item filtering tests | Existing overlay API/action assumptions require live validation |
 | Unraid XML | XML contract check in CI; local PowerShell parsing | No install on the user's Unraid server |
 
-Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 20 Node checks; 19 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks and a generated WebM video. A separate browser-clock suite verifies carousel timing. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
+Local commands: `npm run check`, `npm test`, `npm run test:browser`. The expanded suite has 26 Node checks; 25 pass on Windows and the POSIX permissions test runs on Linux CI. Browser checks pass in headless Microsoft Edge using API mocks and a generated WebM video. A separate browser-clock suite verifies carousel timing. CI uses Chromium. Docker is unavailable on the development machine; the workflow's container smoke test verifies health, assets, anonymous API denial, UID 1000, writable storage and settings surviving container recreation before pushing.
 
 The Connections update tests current form fields without saving, distinguishes missing keys from rejected keys, normalizes key whitespace, supports service URL bases, aligns clear-key controls and colors results. Structured, configurable logging includes safe endpoint/status/timing diagnostics and request IDs while excluding credentials and response bodies. Tests cover 401s, missing keys, non-JSON login pages, redirects, network failures, log filtering, persistence, and failed-save input preservation. Corrupt JSON startup errors omit file contents.
 
@@ -57,16 +57,25 @@ The carousel uses a fixed-height stage in its initial markup, with stable loadin
 
 Browser tests hold the featured API response to check that loading causes no layout shift, exercise all eight dots and an animated transition, verify actual video hover-pause, navigation removal/colors and generated-video decoding. The controlled-clock test advances time through 20 seconds, a 40-second hover pause and the remaining interval, and checks progress reset and stable failure geometry. Detail-view behavior is unchanged in this refinement.
 
+## Native player, library and account update
+
+Direct MP4 and HLS playback now runs through a private session-bound resource graph with range seeking, source/track negotiation, VTT conversion and graphical-subtitle burn-in requests. HLS resources reject arbitrary upstream origins, item paths and credential parameters. Start/progress/pause/stop reports preserve Jellyfin resume state; owned encodings are stopped on close, renegotiation and natural completion. Stale sessions are reaped. Real browser decoding uses locally generated synthetic H.264/AAC media through the actual app proxy and a mock Jellyfin server.
+
+The player includes native controls, speed/volume/quality/version/audio/subtitle selectors, keyboard shortcuts, hold-to-speed, fullscreen/PiP, chapters, bookmarks, spoiler guards, MediaSegments skip controls, per-season episode paging and next-episode countdown. Language defaults are negotiated by Jellyfin. Graphical subtitle burn-in requests and HEVC/AV1 capability reporting are implemented but actual server transcoding and these codecs have not been tested. Browser-specific fullscreen/PiP need device validation.
+
+Library pages now support pagination, sorting, genre/year/watch filters, collections, favorites, watched actions, quality labels and a per-user hidden list. Accounts manage durable playback/subtitle preferences, bookmarks, hidden-title restoration, Jellyfin language preferences and password changes. Native Next Up, person browsing, deep links, browser history, bounded/deduplicated response caches and detail hover prefetching were added. Library/account browser tests exercise filters, favorites, hide/restore, collections, persistence and mobile width using the actual app and mock Jellyfin.
+
+Every requested plugin has an explicit compatibility entry in Administration → Plugins. Native MediaSegments cover Intro Skipper/SkipMe.db data; the episode drawer replaces InPlayerEpisodePreview behavior. Backend metadata/artwork plugins remain independent. Role-filtered service links replace simple Custom Tabs navigation. A versioned native page API supports reviewed bundled extensions; original injected scripts/pages need adapters. Enhanced reviews have a user-scoped backend adapter and native UI with text/rating validation. Plugin inventory/reviews/navigation permissions have contract tests; exact installed plugin versions remain unverified.
+
 ## Still incomplete
 
-- Full-length playback, remux/transcoding preview support, subtitle/audio selection and playback reporting. Short compatible direct-play previews are implemented.
-- Full library browsing/pagination (currently capped at 60 items), discovery/search pagination and episode pagination beyond the first 100 episodes in a season. Universal search covers movies and shows on the first results page.
-- Prefetching, request deduplication, optimistic mutations and persistent media caching. There is only a short-lived in-memory response cache and lazy image loading.
-- Jellystat analytics; its current connection test checks HTTP reachability only.
-- Bazarr, Lidarr, Prowlarr and SABnzbd adapters; these services remain independent.
-- Advanced Seerr request options (4K, server/profile selection and request management), account creation/deletion/password resets and advanced parental controls. Sonarr/Radarr queue views remain read-only.
-- Native extensions and Jellyfin plugin compatibility.
-- Automated session cleanup, distributed sessions, a production security audit, and robust offline/reconnect UX.
-- Live Jellyfin 12.4.0.0, Maintainerr and other integration validation. No existing backend container was contacted or changed during local tests.
+- Live Jellyfin 12.4.0.0, actual FFmpeg remux/transcoding, graphical subtitle burn-in, HDR/HEVC/AV1, hardware acceleration, long real libraries and supplied plugin-version validation.
+- Full Jellyfin Enhanced feature parity: external ratings/awards/providers, advanced tag/layout policies, calendars, activity, advanced request/watchlist/issues/automation and remaining household features. The full inventory is in [PRODUCT-PLAN.md](PRODUCT-PLAN.md).
+- Live TV/open-required sources, recordings, SyncPlay, casting, offline downloads, trickplay thumbnails, extras and full Jellyfin administrative parity.
+- Discovery/search pagination; series detail pages still cap a season at 100 episodes (the player drawer supports paging). Hidden-title filtering currently applies to library browsing, not all recommendation/home rows.
+- Optimistic mutations, persistent media caching and broad offline/reconnect behavior. In-memory caches, deduplication, prefetch and player reconnect/retry are implemented.
+- Jellystat analytics and native Bazarr/Lidarr/Prowlarr/SABnzbd adapters. Existing services remain independent.
+- Advanced Seerr options (4K, profile/server selection and request management), account creation/deletion/password resets and advanced parental controls. Sonarr/Radarr queue views remain read-only.
+- Distributed sessions and a production security audit. No existing backend container was contacted or changed during local tests.
 
-Do not expose this preview publicly. Changing the saved Jellyfin URL to an unreachable address can prevent login; correct `jellyfinUrl` in `/config/settings.json` while JellyHub is stopped, then restart JellyHub. Corrupt settings cause a visible startup failure instead of silently discarding credentials.
+Changing the saved Jellyfin URL to an unreachable address can prevent login; correct `jellyfinUrl` in `/config/settings.json` while JellyHub is stopped, then restart JellyHub. Corrupt settings fail visibly rather than discarding credentials.

@@ -1,6 +1,6 @@
 # JellyHub
 
-An independent, modern Jellyfin frontend development preview. Existing Jellyfin and media-management containers stay independent. Compatible files support short previews; full playback is not implemented yet.
+An independent, modern Jellyfin frontend development preview. Existing Jellyfin and media-management containers stay independent. Full video playback now uses Jellyfin’s playback negotiation, direct streams and HLS. This remains a development release until live-server and remaining feature-parity checks are complete.
 
 ## Unraid installation
 
@@ -37,15 +37,29 @@ The carousel occupies its full space from the first Home render, including durin
 
 Movies and TV Shows each have their own **Continue watching** row, using movie and episode resume data respectively. Cards display watch-progress bars. Local detail pages include backdrop artwork, ratings, genres, runtime, synopsis, cast/crew, studios, stream information, similar titles, Maintainerr countdowns and season/episode browsing. Only the current user's accessible items are requested; file paths are not included in the new detail response.
 
+### Full player
+
+**Play**, **Resume** and **Play from beginning** open the native player. Jellyfin decides the available media versions, direct-play support and HLS remux/transcoding URLs. HLS.js is bundled locally and loaded only when needed; no CDN dependency is required. The player includes seeking, audio/subtitle/version/quality selection, playback speed, fullscreen, picture-in-picture, chapter navigation, bookmarks, native MediaSegments skip buttons, a season-aware episode drawer and an optional next-episode countdown. Natural completion, navigation and stream changes report stop and clean up the owned transcoder. Stale tickets expire after missed heartbeats.
+
+Jellyfin access tokens and stream URLs stay server-side. Browser media URLs are session-bound. The proxy validates every playlist resource, supports byte ranges, rejects external URLs and rechecks user/item playback access. VOD seeking uses an absolute timeline; the player seeks after negotiation instead of applying a second timestamp offset to HLS segments.
+
+Click your account name for durable per-user playback preferences, subtitle size/color/position, spoiler protection, auto-pause/resume, intro/outro skip preferences, bookmarks, hidden titles, Jellyfin audio/subtitle languages and password changes. Preferences/bookmarks are stored in the dedicated appdata configuration; playback progress/favorites/watched state belong to Jellyfin.
+
+Movies and TV Shows support 48-title pages, title/date/rating/year/random sorting, genre/year/watch-state filters and Continue Watching. **My list** uses Jellyfin favorites; **Collections** opens permitted box sets. The card menu exposes favorite, watched and hide actions. Native Next Up is shown on Home. Local details link cast members to their permitted library titles. Deep links and browser Back/Forward preserve navigation. Response caches are bounded and deduplicate requests; pointer hover prefetches details.
+
+**Administration → Navigation** configures service links with role visibility. **Plugins** lists actual installed versions and the handling of every requested plugin. Native extension registration is documented in [EXTENSIONS.md](docs/EXTENSIONS.md). The optional Jellyfin Enhanced review adapter uses the caller's permissions and local TMDb identity. Original DOM-injection scripts need porting; full Enhanced feature parity is not claimed.
+
+The automated player tests decode synthetic H.264/AAC MP4 and HLS fixtures through the real JellyHub proxy against a simulated Jellyfin API. They cover resume, segment skip, subtitles, audio/quality changes, progress/stop, natural completion, episode navigation and mobile controls. They do not establish real-server transcoding, HDR, browser/device codec support or compatibility with the supplied plugin versions. Live TV/open-required sources, SyncPlay, casting and offline downloads remain unsupported.
+
 ### Preview compatibility
 
 Previews currently use direct play for H.264 MP4/M4V with AAC/MP3 audio, and VP8/VP9 WebM with Opus/Vorbis audio. HDR, 10-bit, remote/live/open-required sources, unsupported codecs/containers and sources above 20 Mbps fall back to artwork. Browser support and autoplay policy also affect availability. Series previews use an accessible episode. The detail page offers an explicit **Watch preview** button.
 
-The server negotiates playback without live-stream opening, remuxing or transcoding. It proxies byte ranges through short-lived, session-bound URLs and rechecks item access and playback permission for stream requests. Jellyfin access tokens remain server-side. The UI limits previews to about 20 seconds and does not send playback-progress/session-reporting calls, so previews do not intentionally alter Continue Watching. Full-length playback, HLS/transcoding and playback reporting remain future work. Compatibility with real Jellyfin files has not been verified; browser decoding tests use a locally generated WebM clip and server contract tests use mocks.
+The server negotiates playback without live-stream opening, remuxing or transcoding. It proxies byte ranges through short-lived, session-bound URLs and rechecks item access and playback permission for stream requests. Jellyfin access tokens remain server-side. The UI limits previews to about 20 seconds and does not send playback-progress/session-reporting calls, so previews do not intentionally alter Continue Watching. Full playback has a separate negotiated player and reports progress; previews keep their no-report behavior. Compatibility with real Jellyfin files has not been verified; browser decoding tests use a locally generated WebM clip and server contract tests use mocks.
 
 Open a discovery title to request a movie or select TV seasons. Requests use standard quality and Seerr's default server/profile settings. Seerr enforces quotas, approval rules and request permissions. JellyHub resolves the signed-in account by immutable Jellyfin ID, verifies impersonation through `/auth/me`, and sends `X-Api-User` on discovery and request calls. It never accepts a browser-supplied request owner or falls back to the API key's administrator identity. Users need an existing matching Seerr account: sign into Seerr once with Jellyfin, or have an administrator import the account there. Discovery/request failures explain missing configuration or mapping. Live service compatibility has not been verified.
 
-Search and discovery currently return the first page only. Movies/shows already accessible to the user are identified through Jellyfin provider IDs; incomplete metadata can prevent automatic matching. Discovery artwork is proxied from TMDB through a fixed, validated image endpoint. Full playback remains unimplemented.
+Search and discovery currently return the first page only. Movies/shows already accessible to the user are identified through Jellyfin provider IDs; incomplete metadata can prevent automatic matching. Discovery artwork is proxied from TMDB through a fixed, validated image endpoint.
 
 Sonarr/Radarr connections send `X-Api-Key` to `/api/v3/system/status`. Get the key from that service's **Settings → General → Security**; it is different from the web login password. Missing keys are detected before making a request. An HTTP 401 with a configured key means authentication was rejected; check the key, service address and any proxy authentication. A failed settings save means newly entered keys have not been persisted. URLs may include a service URL base such as `http://sonarr:8989/sonarr`.
 

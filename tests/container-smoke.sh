@@ -21,6 +21,9 @@ curl --fail http://127.0.0.1:3100/app.js > /dev/null
 curl --fail http://127.0.0.1:3100/admin.js > /dev/null
 curl --fail http://127.0.0.1:3100/cinema.js > /dev/null
 curl --fail http://127.0.0.1:3100/carousel.js > /dev/null
+for asset in player.js library.js account.js extensions.js reviews.js vendor/hls.min.mjs vendor/hls.worker.js extensions/manifest.json; do
+  curl --fail "http://127.0.0.1:3100/$asset" > /dev/null
+done
 curl --fail http://127.0.0.1:3100/styles.css > /dev/null
 curl --fail http://127.0.0.1:3100/api/branding
 curl --fail http://127.0.0.1:3100/favicon.ico > /dev/null

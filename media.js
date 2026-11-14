@@ -33,7 +33,7 @@ export function createMedia({jf,jellyfin,authHeader,json,cleanId,send}){
     const detail=route.match(/^\/api\/details\/([^/]+)$/);
     if(detail&&method==='GET'){
       const id=cleanId(detail[1]),item=await jf(`Users/${session.id}/Items/${id}`,session);
-      const result={item:cleanItem(item),people:(item.People||[]).slice(0,30).map(p=>({name:p.Name,role:p.Role||p.Type,type:p.Type})),studios:(item.Studios||[]).map(s=>s.Name),technical:technical(item),seasons:[],episodes:[],similar:[],errors:[]};
+      const result={item:cleanItem(item),people:(item.People||[]).slice(0,30).map(p=>({id:p.Id,name:p.Name,role:p.Role||p.Type,type:p.Type,image:!!p.PrimaryImageTag})),studios:(item.Studios||[]).map(s=>s.Name),technical:technical(item),seasons:[],episodes:[],similar:[],errors:[]};
       const work=[(async()=>{try{const q=new URLSearchParams({UserId:session.id,Limit:'12',Fields:'Overview'});result.similar=(await jf(`Items/${id}/Similar?${q}`,session)).Items?.map(cleanItem)||[]}catch{result.errors.push('Similar titles are unavailable.')}})()];
       if(item.Type==='Series')work.push((async()=>{
         try{

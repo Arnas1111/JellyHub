@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { createLogger, logLevels, requestContext, upstreamFailure } from './diagnostics.js';
 import { brandingDefaults, createFeatures } from './features.js';
 import { createMedia } from './media.js';
+import { createPlayback } from './playback.js';
+import { createPersonalization } from './personalization.js';
+import { createCore, libraryItem } from './core.js';
+import { createPlugins } from './plugins.js';
+import { createExtensions } from './extensions.js';
 
 const port = Number(process.env.PORT || 3000);
 // Runtime settings: service addresses default to the user's existing Docker names.
@@ -15,6 +20,7 @@ const configDir=process.env.CONFIG_DIR || '/config';
 const configFile=path.join(configDir,'settings.json');
 const defaults={
   ...brandingDefaults,
+  userState:'{}',navigation:'[]',
   jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
   seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
   sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
@@ -68,7 +74,7 @@ async function saveConfig(patch){
   const previous=configSaveQueue;let release;configSaveQueue=new Promise(resolve=>release=resolve);
   await previous;
   try{
-  const next={...config,...patch};
+  const next={...config,...(typeof patch==='function'?patch(config):patch)};
   const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});logger.log('error','settings.save_failed',{code:e.code,configDir});throw storageFailure(e)}
   config=next;refreshIntegrations();
@@ -111,7 +117,7 @@ async function maintainerrIndex(){
 const sessions = new Map(); // V0.1 single-instance memory; restart clears sessions
 const attempts = new Map();
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
-const mime = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml' };
+const mime = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml' };
 const MAX_BODY=8192;
 const json = (res,status,data,headers={}) => send(res,status,JSON.stringify(data),{'Content-Type':'application/json; charset=utf-8',...headers});
 function send(res,status,body,headers={}) { res.writeHead(status,{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',...headers});res.end(body); }
@@ -147,6 +153,11 @@ function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(n
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
 const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,json,readBody,cleanId,send});
 const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send});
+const playbackAPI=createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,send,logger});
+const personalizationAPI=createPersonalization({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId});
+const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConfig});
+const pluginAPI=createPlugins({jf,json,readBody,cleanId});
+const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,json});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
@@ -178,6 +189,11 @@ const api = async(req,res,url)=>{
   }
   if(await featureAPI(req,res,url,s))return;
   if(await mediaAPI(req,res,url,s))return;
+  if(await playbackAPI(req,res,url,s))return;
+  if(await personalizationAPI(req,res,url,s))return;
+  if(await coreAPI(req,res,url,s))return;
+  if(await pluginAPI(req,res,url,s))return;
+  if(await extensionAPI(req,res,url,s))return;
   if(url.pathname==='/api/logout' && method==='POST'){
     sessions.delete(sid);
     jf('Sessions/Logout',s,{method:'POST'}).catch(()=>{});
@@ -265,9 +281,9 @@ const api = async(req,res,url)=>{
     return json(res,200,{configured:index.configured,entries:index.entries,updatedAt:index.updatedAt||null});
   }
   if(url.pathname==='/api/home'){
-    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'DateCreated',SortOrder:'Descending',Limit:'32',Fields:'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,CommunityRating',EnableUserData:'true'});
+    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SortBy:'DateCreated',SortOrder:'Descending',Limit:'32',Fields:'PrimaryImageAspectRatio,Overview,Genres,ProductionYear,CommunityRating,MediaSources',EnableUserData:'true'});
     const [recent,resume]=await Promise.allSettled([jf(`Users/${s.id}/Items?${q}`,s),jf(`Users/${s.id}/Items/Resume?Limit=18&MediaTypes=Video`,s)]);
-    return json(res,200,{recent:recent.status==='fulfilled'?(recent.value.Items||[]):[],resume:resume.status==='fulfilled'?(resume.value.Items||[]):[],errors:[recent,resume].filter(x=>x.status==='rejected').map(x=>x.reason.message)});
+    return json(res,200,{recent:recent.status==='fulfilled'?(recent.value.Items||[]).map(libraryItem):[],resume:resume.status==='fulfilled'?(resume.value.Items||[]).map(libraryItem):[],errors:[recent,resume].filter(x=>x.status==='rejected').map(x=>x.reason.message)});
   }
   if(url.pathname==='/api/items'){
     const q=new URLSearchParams({Recursive:'true',Limit:'60',Fields:'Overview,Genres,ProductionYear,CommunityRating',EnableUserData:'true',SortBy:'SortName'});
@@ -324,7 +340,7 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
     const file=path.resolve(publicDir,name);
     if(!file.startsWith(publicDir))return send(res,403,'Forbidden');
     let body;try{body=await fs.readFile(file)}catch{return send(res,404,'Not found')}
-    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
+    res.writeHead(200,{'Content-Type':mime[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",'Cache-Control':'no-cache'});
     res.end(body);
   }catch(e){logger.log('error','request.failed',{code:e.code||'REQUEST_FAILED',status:e.status||502});if(res.headersSent){res.destroy();return}json(res,e.status||502,{error:e.message||'Request failed',code:e.code||'REQUEST_FAILED',requestId});}
 }));

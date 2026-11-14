@@ -169,6 +169,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     const tested=await (await request('/api/admin/settings/test',{cookie:admin,method:'POST',body:{service:'sonarr'}})).json();assert.equal(tested.status,'connected');
     await request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{},keys:{seerrKey:''}}});
     const branding={title:'Test Cinema',name:'My Hub',welcome:'Find a movie',accent:'#bbaaee'};
+    await request('/api/preferences',{cookie:admin,method:'PUT',body:{autoPause:false}});
     await Promise.all([request('/api/admin/branding',{cookie:admin,method:'PUT',body:branding}),request('/api/admin/settings',{cookie:admin,method:'PUT',body:{urls:{sonarrUrl:service},keys:{}}})]);
     assert.equal((await (await request('/api/branding')).json()).title,'Test Cinema');
     const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=';
@@ -180,6 +181,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     await stop();await start();
     assert.equal((await request('/api/me',{cookie:admin})).status,401);
     const newAdmin=await login('admin');
+    assert.equal((await (await request('/api/preferences',{cookie:newAdmin})).json()).autoPause,false);
     assert.equal((await (await request('/api/branding')).json()).name,'My Hub');
     assert.equal(Buffer.from(await (await request('/favicon.ico')).arrayBuffer()).toString('base64'),png);
     assert.equal(Buffer.from(await (await request('/branding-logo')).arrayBuffer()).toString('base64'),png);
