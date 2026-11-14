@@ -1,3 +1,5 @@
+import {createProfiles,profileName,profileOf} from './profiles.js';
+import {managementIds,isManagementCollection} from './collection-visibility.js';
 import {createStaticAssets} from './static-assets.js';
 import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -21,7 +23,7 @@ const configDir=process.env.CONFIG_DIR || '/config';
 const configFile=path.join(configDir,'settings.json');
 const defaults={
   ...brandingDefaults,
-  userState:'{}',navigation:'[]',
+  userState:'{}',navigation:'[]',managementCollections:'[]',hiddenManagementCollections:'[]',
   jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
   seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
   sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
@@ -78,7 +80,7 @@ async function saveConfig(patch){
   const next={...config,...(typeof patch==='function'?patch(config):patch)};
   const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});logger.log('error','settings.save_failed',{code:e.code,configDir});throw storageFailure(e)}
-  config=next;refreshIntegrations();
+  const connectionsChanged=[...settingUrls,...settingKeys].some(key=>config[key]!==next[key]);config=next;if(connectionsChanged)refreshIntegrations();
   logger.setLevel(next.logLevel);logger.log('info','settings.saved');
   }finally{release()}
 }
@@ -93,7 +95,8 @@ async function maintainerrIndex(){
   maintainerrCache.inFlight=(async()=>{
     const collections=await upstream(integrations.maintainerr.url,'api/collections/overlay-data',{timeout:12000});
     if(!Array.isArray(collections))throw new Error('Unexpected Maintainerr collections response');
-    const byId={}; const entries=[];
+    const byId={}; const entries=[];const managedCollections=[...new Set(collections.map(collection=>collection.mediaServerId).filter(id=>typeof id==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(id)))].sort();
+    if(JSON.stringify(managedCollections)!==config.managementCollections){const serialized=JSON.stringify(managedCollections);try{await saveConfig({managementCollections:serialized})}catch(error){config={...config,managementCollections:serialized};logger.log('warn','management_collections.not_persisted',{code:error.code||'CONFIG_NOT_WRITABLE'})}}
     for(const c of collections){
       if(c.isActive===false||!DELETING_ACTIONS.has(Number(c.arrAction)))continue;
       // Maintainerr uses null as "due now" in its handler but no countdown in the UI.
@@ -110,7 +113,7 @@ async function maintainerrIndex(){
         if(!old||entry.deletionDate<old.deletionDate)byId[entry.itemId]=entry;
       }
     }
-    return {configured:true,byId,entries,updatedAt:new Date().toISOString()};
+    return {configured:true,byId,entries,managedCollections,updatedAt:new Date().toISOString()};
   })();
   try{const result=await maintainerrCache.inFlight;maintainerrCache.value=result;maintainerrCache.expires=Date.now()+60000;return result}
   finally{maintainerrCache.inFlight=null}
@@ -148,7 +151,12 @@ async function upstream(base, route, {headers={},method='GET',body,timeout=8000,
     throw Object.assign(new Error(diagnostics.message),{status:status>=400?status:502,code,diagnostics});
   } finally {clearTimeout(timer)}
 }
-const jf=(route,s,opts={})=>upstream(jellyfin(),route,{...opts,headers:{'Authorization':authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
+const jf=async(route,s,opts={})=>{
+  const item=route.match(/^Users\/[^/]+\/Items\/([^/?]+)$/);if(item&&isManagementCollection(item[1],config)){if(s.admin){const me=await upstream(jellyfin(),'Users/Me',{headers:{Authorization:authHeader(s,s.deviceId)}});s.admin=!!me.Policy?.IsAdministrator}if(!s.admin)throw Object.assign(Error('Management collections are only available in Administration.'),{status:403})}
+  const data=await upstream(jellyfin(),route,{...opts,headers:{Authorization:authHeader(s,s.deviceId),...(opts.body?{'Content-Type':'application/json'}:{}),...opts.headers}});
+  if(Array.isArray(data?.Items)&&data.Items.some(item=>isManagementCollection(item.Id,config))){if(s.admin){const me=await upstream(jellyfin(),'Users/Me',{headers:{Authorization:authHeader(s,s.deviceId)}});s.admin=!!me.Policy?.IsAdministrator}if(!s.admin){const visible=data.Items.filter(item=>!isManagementCollection(item.Id,config));return {...data,Items:visible,TotalRecordCount:Math.max(0,(data.TotalRecordCount??data.Items.length)-(data.Items.length-visible.length))}}}
+  return data;
+};
 async function readBody(req,limit=MAX_BODY){let raw='';for await(const part of req){raw+=part;if(Buffer.byteLength(raw)>limit)throw Object.assign(new Error('Request too large'),{status:413})}let data;try{data=JSON.parse(raw||'{}')}catch{throw Object.assign(new Error('Invalid JSON'),{status:400})}if(!data||typeof data!=='object'||Array.isArray(data))throw Object.assign(new Error('JSON body must be an object'),{status:400});return data}
 function cleanId(x){if(!/^[a-zA-Z0-9-]{1,80}$/.test(x||''))throw Object.assign(new Error('Invalid item id'),{status:400});return x}
 function adminOnly(s){if(!s.admin)throw Object.assign(new Error('Administrator required'),{status:403})}
@@ -156,9 +164,10 @@ const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,jso
 const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig:()=>config});
 const playbackAPI=createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,send,logger});
 const personalizationAPI=createPersonalization({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId});
-const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConfig});
-const pluginAPI=createPlugins({jf,json,readBody,cleanId});
+const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConfig,getManagementCollections:async()=>{try{await maintainerrIndex()}catch{/* Last known IDs remain available in appdata. */}return managementIds(config)}});
+const pluginAPI=createPlugins({jf,json,readBody,cleanId,getConfig:()=>config});
 const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,json});
+const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
@@ -193,6 +202,7 @@ const api = async(req,res,url)=>{
   if(await playbackAPI(req,res,url,s))return;
   if(await personalizationAPI(req,res,url,s))return;
   if(await coreAPI(req,res,url,s))return;
+  if(await profileAPI(req,res,url,s))return;
   if(await pluginAPI(req,res,url,s))return;
   if(await extensionAPI(req,res,url,s))return;
   if(url.pathname==='/api/logout' && method==='POST'){
@@ -203,7 +213,7 @@ const api = async(req,res,url)=>{
   if(url.pathname==='/api/me') {
     const me=await jf('Users/Me',s);
     s.admin=!!me.Policy?.IsAdministrator; s.name=me.Name;
-    return json(res,200,{id:me.Id,name:me.Name,admin:s.admin});
+    return json(res,200,{id:me.Id,name:profileName(config,s.id,me.Name),username:me.Name,admin:s.admin,avatar:'/api/profile/avatar?v='+encodeURIComponent(profileOf(config,s.id).avatarVersion||me.PrimaryImageTag||'default')});
   }
   if(url.pathname==='/api/admin/logging'&&method==='PUT'){
     const {level}=await readBody(req);

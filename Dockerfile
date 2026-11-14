@@ -1,6 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json server.js static-assets.js diagnostics.js features.js media.js playback.js personalization.js core.js plugins.js extensions.js docker-entrypoint.sh ./
+COPY package.json my-list.js profiles.js collection-visibility.js server.js static-assets.js diagnostics.js features.js media.js playback.js personalization.js core.js plugins.js extensions.js docker-entrypoint.sh ./
 COPY public ./public
 ENV NODE_ENV=production PORT=3000 CONFIG_DIR=/config
 RUN apk add --no-cache su-exec && mkdir -p /config && chown node:node /config

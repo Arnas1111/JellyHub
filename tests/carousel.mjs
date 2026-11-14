@@ -36,6 +36,6 @@ try{
   await page.mouse.move(0,0);await page.clock.runFor(9000);assert.match(await active(),/^Show featured title 1:/);assert.ok(Number(await page.locator('.feature-progress').getAttribute('aria-valuenow'))>=94,'Hover must preserve elapsed time rather than restarting the interval');
   await page.clock.runFor(1200);await page.getByRole('heading',{name:'Movie 2',exact:true}).waitFor();assert.match(await active(),/^Show featured title 2:/);
   assert.ok(Number(await page.locator('.feature-progress').getAttribute('aria-valuenow'))<5);
-  await page.evaluate(()=>sessionStorage.clear());failFeatured=true;await page.reload();await page.getByRole('heading',{name:'Explore your library.',exact:true}).waitFor();assert.equal((await page.locator('.featured').boundingBox()).height,480,'Failure state must retain the same reserved stage');
+  await page.evaluate(()=>sessionStorage.clear());failFeatured=true;await page.reload();await page.getByRole('heading',{name:'Browse the server.',exact:true}).waitFor();assert.equal((await page.locator('.featured').boundingBox()).height,480,'Failure state must retain the same reserved stage');
   console.log('Carousel clock checks passed: 20-second cadence, hover freezes and resumes remaining time, progress resets on advance, and failure state preserves layout.');
 }finally{await browser?.close();if(child.exitCode===null){const exit=once(child,'exit');child.kill();await exit}await rm(dir,{recursive:true,force:true})}

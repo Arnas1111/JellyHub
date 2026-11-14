@@ -1,3 +1,4 @@
+import {createMyList} from './my-list.js';
 import {visibleItems,libraryItem} from './core.js';
 import crypto from 'node:crypto';
 
@@ -47,7 +48,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
     const headers={'X-Api-User':String(mapped.id)};
     const current=await seerr('auth/me',headers);
     if(current?.id!==mapped.id||normalizedId(current.jellyfinUserId)!==normalizedId(session.id))fail(403,'Seerr user impersonation could not be verified. Update Seerr before enabling requests.');
-    return {headers,permissions:Number(current.permissions)||0};
+    return {id:Number(mapped.id),headers,permissions:Number(current.permissions)||0};
   }
   function catalogItem(item,type,permissions){
     const status=Number(item.mediaInfo?.status)||1;
@@ -55,12 +56,13 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
   }
   async function libraryMatches(session,ids){
     if(!ids.length)return [];
-    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',Limit:'100',Fields:'ProviderIds,ProductionYear,Overview,Genres,CommunityRating',AnyProviderIdEquals:ids.map(id=>'tmdb.'+id).join(',')});
+    const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',Limit:'100',Fields:'ProviderIds,ProductionYear,Overview,Genres,CommunityRating,MediaSources',AnyProviderIdEquals:ids.map(id=>'tmdb.'+id).join(',')});
     return (await jf(`Users/${session.id}/Items?${q}`,session)).Items||[];
   }
   function attachLibrary(items,library){
     return items.map(item=>{const match=library.find(local=>String(local.ProviderIds?.Tmdb)===String(item.id)&&local.Type===(item.mediaType==='movie'?'Movie':'Series'));return {...item,libraryId:match?.Id||null}});
   }
+  const myList=createMyList({jf,seerr,seerrIdentity,libraryMatches,catalogItem,json,getConfig});
   const pendingRequests=new Set();
   return async function handle(req,res,url,session){
     const route=url.pathname,method=req.method;
@@ -71,6 +73,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       send(res,200,'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171e2c"/><text x="15" y="46" fill="#9980ff" font-family="sans-serif" font-size="48">j</text></svg>',{'Content-Type':'image/svg+xml'});return true;
     }
     if(!session)return false;
+    if(await myList(req,res,url,session))return true;
     if(route==='/api/admin/branding/logo'){
       if(method==='DELETE')await saveConfig({brandingLogo:''});
       else if(method==='PUT'){

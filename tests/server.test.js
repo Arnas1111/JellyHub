@@ -27,7 +27,7 @@ test('startup, authentication, media permissions, integrations and persisted set
     }
     if(url.pathname==='/Users/Me')return send(200,{Id:token.includes('Token="admin"')?'admin':'viewer',Name:'Test',Policy:{IsAdministrator:token.includes('Token="admin"')&&!revoked,EnableMediaPlayback:playbackAllowed}});
     if(url.pathname==='/Users/viewer/Items/hidden')return send(403,{});
-    if(/^\/Users\/[^/]+\/Items\/(visible|hidden|series|episode1)$/.test(url.pathname))return send(200,{Id:url.pathname.split('/').at(-1),Name:'Movie',Type:url.pathname.endsWith('series')?'Series':url.pathname.endsWith('episode1')?'Episode':'Movie',RunTimeTicks:90000000000,Path:'/private/movie.mp4',People:[{Name:'An Actor',Role:'Lead',Type:'Actor'}],Studios:[{Name:'A Studio'}],MediaStreams:[{Type:'Video',Codec:'h264',Height:1080},{Type:'Audio',Language:'eng'},{Type:'Subtitle',Language:'deu'}]});
+    if(/^\/Users\/[^/]+\/Items\/(visible|hidden|series|episode1|maintenance)$/.test(url.pathname))return send(200,{Id:url.pathname.split('/').at(-1),Name:'Movie',Type:url.pathname.endsWith('maintenance')?'BoxSet':url.pathname.endsWith('series')?'Series':url.pathname.endsWith('episode1')?'Episode':'Movie',RunTimeTicks:90000000000,Path:'/private/movie.mp4',People:[{Name:'An Actor',Role:'Lead',Type:'Actor'}],Studios:[{Name:'A Studio'}],MediaStreams:[{Type:'Video',Codec:'h264',Height:1080},{Type:'Audio',Language:'eng'},{Type:'Subtitle',Language:'deu'}]});
     if(url.pathname.endsWith('/Items/Resume'))return send(200,{Items:[url.searchParams.get('IncludeItemTypes')==='Episode'?{Id:'episode1',Name:'Episode',Type:'Episode',SeriesName:'A Show'}:{Id:'visible',Name:'Resume',Type:'Movie'}]});
     if(url.pathname==='/Shows/series/Seasons')return send(200,{Items:[{Id:'season1',Name:'Season 1',Type:'Season'}]});
     if(url.pathname==='/Shows/series/Episodes')return send(200,{Items:[{Id:'episode1',Name:'Pilot',Type:'Episode',Path:'/private/episode.mp4'}]});
@@ -41,12 +41,12 @@ test('startup, authentication, media permissions, integrations and persisted set
       const bytes=Buffer.from('0123456789');const ranged=!!req.headers.range;
       res.writeHead(ranged?206:200,{'Content-Type':'video/mp4','Content-Length':ranged?4:10,'Accept-Ranges':'bytes',...(ranged?{'Content-Range':'bytes 0-3/10'}:{})});return res.end(req.method==='HEAD'?undefined:ranged?bytes.subarray(0,4):bytes);
     }
-    if(url.pathname.endsWith('/Items'))return send(200,{Items:[{Id:'visible',Name:'Movie'}]});
+    if(url.pathname.endsWith('/Items')){if(url.searchParams.get('IncludeItemTypes')==='BoxSet')return send(200,{Items:[{Id:'genuine',Name:'Film Collection',Type:'BoxSet'},...(url.searchParams.get('ExcludeItemIds')?.includes('maintenance')?[]:[{Id:'maintenance',Name:'Basic Movies',Type:'BoxSet'}])],TotalRecordCount:url.searchParams.get('ExcludeItemIds')?.includes('maintenance')?1:2});return send(200,{Items:[{Id:'visible',Name:'Movie'}]})}
     if(url.pathname.endsWith('/Views'))return send(200,{Items:[]});
     if(url.pathname==='/Items/visible/Images/Primary'){res.writeHead(200,{'Content-Type':'image/jpeg'});return res.end('image')}
     if(url.pathname==='/api/collections/overlay-data'){
       overlayCalls++;
-      return send(200,[{id:1,title:'Expiring',arrAction:0,isActive:true,deleteAfterDays:7,media:[{mediaServerId:'visible',addDate:'2026-01-01T00:00:00Z'},{mediaServerId:'hidden',addDate:'2026-01-01T00:00:00Z'}]},{id:2,title:'Inactive',isActive:false,arrAction:0,deleteAfterDays:1,media:[{mediaServerId:'visible',addDate:'2026-01-01T00:00:00Z'}]}]);
+      return send(200,[{id:1,mediaServerId:'maintenance',title:'Expiring',arrAction:0,isActive:true,deleteAfterDays:7,media:[{mediaServerId:'visible',addDate:'2026-01-01T00:00:00Z'},{mediaServerId:'hidden',addDate:'2026-01-01T00:00:00Z'}]},{id:2,title:'Inactive',isActive:false,arrAction:0,deleteAfterDays:1,media:[{mediaServerId:'visible',addDate:'2026-01-01T00:00:00Z'}]}]);
     }
     if(url.pathname==='/api/v1/request')return send(200,{results:[{id:1}],pageInfo:{results:1}});
     if(url.pathname==='/api/v3/queue')return send(200,{records:[{id:1}],totalRecords:1});
@@ -114,6 +114,12 @@ test('startup, authentication, media permissions, integrations and persisted set
     assert.equal((await request('/api/details/series?seasonId=foreign',{cookie:viewer})).status,400);
     assert.equal((await request('/api/details/hidden',{cookie:viewer})).status,403);
     assert.equal((await request('/api/continue?type=invalid',{cookie:viewer})).status,400);
+  });
+  await t.test('Maintainerr management collections are excluded from browsing and denied to normal users',async()=>{
+    for(const cookie of [viewer,admin]){const data=await (await request('/api/browse?type=BoxSet',{cookie})).json();assert.deepEqual(data.Items.map(item=>item.Id),['genuine']);assert.equal(data.TotalRecordCount,1)}
+    for(const route of ['/api/item/maintenance','/api/details/maintenance','/api/image/maintenance'])assert.equal((await request(route,{cookie:viewer})).status,403,route);
+    assert.equal((await request('/api/item/maintenance',{cookie:admin})).status,200);assert.equal((await request('/api/browse?type=Movie,Series&parent=maintenance',{cookie:admin})).status,403);assert.equal((await request('/api/admin/management-collections',{cookie:viewer})).status,403);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8')).managementCollections,'["maintenance"]');
   });
   await t.test('preview negotiation and range streaming keep tokens private and reject cross-session access',async()=>{
     const preview=await (await request('/api/preview/visible',{cookie:viewer})).json();assert.equal(preview.playable,true);assert.equal(preview.clipSeconds,20);assert.doesNotMatch(JSON.stringify(preview),/source1|private|Token|AccessToken/);

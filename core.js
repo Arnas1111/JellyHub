@@ -1,3 +1,5 @@
+import {profileName} from './profiles.js';
+import {managementIds,isManagementCollection} from './collection-visibility.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 export function libraryItem(item){
   const result=Object.fromEntries(['Id','Name','Type','Overview','ProductionYear','OfficialRating','CommunityRating','RunTimeTicks','Genres','ImageTags','BackdropImageTags','SeriesId','SeriesName','IndexNumber','ParentIndexNumber','UserData','ChildCount'].filter(key=>item[key]!==undefined).map(key=>[key,item[key]]));
@@ -8,9 +10,12 @@ export function libraryItem(item){
 }
 function stateOf(config,user){try{return JSON.parse(config.userState||'{}')[user]||{}}catch{return {}}}
 export function visibleItems(items,config,userId){const hidden=new Set(stateOf(config,userId).hiddenItems||[]);return items.filter(item=>!hidden.has(item.Id)&&!hidden.has(item.SeriesId)&&!hidden.has(item.libraryId))}
-export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig}){
+export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig,getManagementCollections=async()=>managementIds(getConfig())}){
   return async(req,res,url,user)=>{
     const route=url.pathname;
+    if(route==='/api/admin/management-collections'&&req.method==='GET'){
+      if(!user.admin)fail(403,'Administrator required');const ids=await getManagementCollections();if(!ids.length){json(res,200,{Items:[]});return true}const q=new URLSearchParams({Ids:ids.join(','),Limit:'100',Recursive:'true'}),data=await jf(`Users/${user.id}/Items?${q}`,user);json(res,200,{Items:(data.Items||[]).filter(item=>isManagementCollection(item.Id,getConfig())).map(libraryItem)});return true;
+    }
     if(route==='/api/library-views'&&req.method==='GET'){
       const data=await jf(`Users/${user.id}/Views`,user);json(res,200,{views:(data.Items||[]).filter(item=>!['music','musicvideos','books','audiobooks','photos'].includes(item.CollectionType)).map(item=>({id:item.Id,name:item.Name,type:item.CollectionType||'mixed'}))});return true;
     }
@@ -18,15 +23,16 @@ export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig}){
       const type=url.searchParams.get('type')||'Movie';if(!['Movie','Series','BoxSet','Movie,Series'].includes(type))fail(400,'Invalid library type');
       const start=Number(url.searchParams.get('start')||0),limit=Number(url.searchParams.get('limit')||60);if(!Number.isSafeInteger(start)||start<0||start>500000||!Number.isSafeInteger(limit)||limit<1||limit>100)fail(400,'Invalid page');
       const sort=url.searchParams.get('sort')||'SortName';if(!['SortName','DateCreated','PremiereDate','CommunityRating','Random','DatePlayed','ProductionYear'].includes(sort))fail(400,'Invalid sort order');
+      const management=type==='BoxSet'?await getManagementCollections():managementIds(getConfig());
       const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:type,StartIndex:String(start),Limit:String(limit),SortBy:sort,SortOrder:url.searchParams.get('order')==='desc'?'Descending':'Ascending',Fields:'Overview,Genres,ProductionYear,CommunityRating,MediaSources',EnableUserData:'true',EnableTotalRecordCount:'true'});
       const search=(url.searchParams.get('q')||'').slice(0,120);if(search)q.set('SearchTerm',search);
-      const parent=url.searchParams.get('parent');if(parent){q.set('ParentId',cleanId(parent));await jf(`Users/${user.id}/Items/${cleanId(parent)}`,user)}
+      const parent=url.searchParams.get('parent');if(parent){if(isManagementCollection(parent,getConfig()))fail(403,'Management collections belong in Administration.');q.set('ParentId',cleanId(parent));await jf(`Users/${user.id}/Items/${cleanId(parent)}`,user)}
       const person=url.searchParams.get('person');if(person)q.set('PersonIds',cleanId(person));
       const genre=url.searchParams.get('genre');if(genre)q.set('Genres',genre.slice(0,80));
       const year=url.searchParams.get('year');if(year){if(!/^\d{4}$/.test(year))fail(400,'Invalid year');q.set('Years',year)}
       const filter=url.searchParams.get('filter');if(filter){if(!['IsFavorite','IsPlayed','IsUnplayed'].includes(filter))fail(400,'Invalid filter');q.set('Filters',filter)}
-      const hidden=stateOf(getConfig(),user.id).hiddenItems||[];if(hidden.length)q.set('ExcludeItemIds',hidden.join(','));
-      const data=await jf(`Users/${user.id}/Items?${q}`,user);json(res,200,{Items:(data.Items||[]).map(libraryItem),TotalRecordCount:data.TotalRecordCount??data.Items?.length??0,StartIndex:start});return true;
+      const hidden=[...(stateOf(getConfig(),user.id).hiddenItems||[]),...management];if(hidden.length)q.set('ExcludeItemIds',[...new Set(hidden)].join(','));
+      const data=await jf(`Users/${user.id}/Items?${q}`,user);json(res,200,{Items:(data.Items||[]).filter(item=>!isManagementCollection(item.Id,getConfig())).map(libraryItem),TotalRecordCount:data.TotalRecordCount??data.Items?.length??0,StartIndex:start});return true;
     }
     if(route==='/api/library-filters'&&req.method==='GET'){
       const type=url.searchParams.get('type')||'Movie';if(!['Movie','Series'].includes(type))fail(400,'Invalid library type');
@@ -37,7 +43,7 @@ export function createCore({jf,json,readBody,cleanId,getConfig,saveConfig}){
       const q=new URLSearchParams({UserId:user.id,Limit:'24',Fields:'Overview,MediaSources',EnableUserData:'true'});const data=await jf('Shows/NextUp?'+q,user);json(res,200,{Items:visibleItems(data.Items||[],getConfig(),user.id).map(libraryItem)});return true;
     }
     if(route==='/api/account'&&req.method==='GET'){
-      const me=await jf('Users/Me',user);json(res,200,{id:me.Id,name:me.Name,hasPassword:me.HasPassword,configuration:{AudioLanguagePreference:me.Configuration?.AudioLanguagePreference||'',SubtitleLanguagePreference:me.Configuration?.SubtitleLanguagePreference||'',SubtitleMode:me.Configuration?.SubtitleMode||'Default'},canEdit:me.Policy?.EnableUserPreferenceAccess!==false});return true;
+      const me=await jf('Users/Me',user);json(res,200,{id:me.Id,name:profileName(getConfig(),user.id,me.Name),username:me.Name,hasPassword:me.HasPassword,configuration:{AudioLanguagePreference:me.Configuration?.AudioLanguagePreference||'',SubtitleLanguagePreference:me.Configuration?.SubtitleLanguagePreference||'',SubtitleMode:me.Configuration?.SubtitleMode||'Default'},canEdit:me.Policy?.EnableUserPreferenceAccess!==false});return true;
     }
     if(route==='/api/account/password'&&req.method==='PUT'){
       const input=await readBody(req);if(typeof input.currentPassword!=='string'||input.currentPassword.length>1024||typeof input.newPassword!=='string'||input.newPassword.length<8||input.newPassword.length>1024)fail(400,'Enter the current password and a new password of 8–1024 characters.');

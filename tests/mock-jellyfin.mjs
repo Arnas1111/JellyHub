@@ -1,24 +1,35 @@
 import http from 'node:http';
 import { once } from 'node:events';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const fixture=name=>readFile(new URL('./fixtures/'+name,import.meta.url));
-export async function startPlaybackFixture(){
+export async function startPlaybackFixture(options={}){
   const dir=await mkdtemp(path.join(os.tmpdir(),'jellyhub-playback-'));
+  if(options.seerr)await writeFile(path.join(dir,'settings.json'),JSON.stringify({seerrKey:'fixture-key'}));
   const bytes=await fixture('direct.mp4'),calls=[],reports=[],playbackInfo=[];
-  let allowPlayback=true,startedCount=0;const userData=new Map();
-  const movie=id=>({Id:id,Name:id==='movie-hls'?'HLS Test Movie':id==='episode2'?'The next episode':id==='episode1'?'The pilot':'Direct Test Movie',Type:id.startsWith('series')?'Series':id.startsWith('episode')?'Episode':'Movie',SeriesId:id.startsWith('episode')?'series':undefined,SeriesName:id.startsWith('episode')?'Synthetic Series':undefined,SeasonId:id.startsWith('episode')?'season1':undefined,ParentIndexNumber:1,IndexNumber:id==='episode2'?2:1,RunTimeTicks:120000000,UserData:{PlaybackPositionTicks:20000000,Played:false},ImageTags:{},Genres:['Test'],OfficialRating:'G',People:[],Studios:[],Chapters:[{Name:'Opening',StartPositionTicks:0},{Name:'Middle',StartPositionTicks:60000000}]});
+  let allowPlayback=true,startedCount=0;const userData=new Map(),avatars=new Map();
+  const movie=id=>({Id:id,Name:id==='movie-hls'?'HLS Test Movie':id==='episode2'?'The next episode':id==='episode1'?'The pilot':'Direct Test Movie',Type:id.startsWith('series')?'Series':id.startsWith('episode')?'Episode':'Movie',SeriesId:id.startsWith('episode')?'series':undefined,SeriesName:id.startsWith('episode')?'Synthetic Series':undefined,SeasonId:id.startsWith('episode')?'season1':undefined,ParentIndexNumber:1,IndexNumber:id==='episode2'?2:1,RunTimeTicks:120000000,UserData:{PlaybackPositionTicks:20000000,Played:false},ImageTags:{},ProviderIds:id==='movie-direct'?{Tmdb:'100'}:id==='movie-hls'?{Tmdb:'200'}:{},Genres:['Test'],OfficialRating:'G',People:[],Studios:[],Chapters:[{Name:'Opening',StartPositionTicks:0},{Name:'Middle',StartPositionTicks:60000000}]});
   const streams=[{Type:'Video',Index:0,Codec:'h264',BitDepth:8,VideoRange:'SDR',Width:160,Height:90},{Type:'Audio',Index:1,Codec:'aac',Language:'eng',DisplayTitle:'English test tone',IsDefault:true},{Type:'Audio',Index:2,Codec:'aac',Language:'deu',DisplayTitle:'German test tone'},{Type:'Subtitle',Index:3,Codec:'srt',Language:'eng',DisplayTitle:'English subtitles',IsExternal:true}];
   const upstream=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://fixture'),auth=req.headers.authorization||'';let raw='';for await(const part of req)raw+=part;
-    const body=raw?JSON.parse(raw):undefined;calls.push({path:url.pathname,query:Object.fromEntries(url.searchParams),method:req.method,body,range:req.headers.range,auth});
+    const body=raw?(url.pathname.includes('/Images/Primary')?raw:JSON.parse(raw)):undefined;calls.push({path:url.pathname,query:Object.fromEntries(url.searchParams),method:req.method,body,range:req.headers.range,auth});
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data))};
     if(url.pathname==='/Users/AuthenticateByName')return json({AccessToken:'secret-token-'+body.Username,User:{Id:body.Username,Name:body.Username,Policy:{IsAdministrator:body.Username==='admin'}}});
+    if(url.pathname==='/api/collections/overlay-data')return json(options.management?[{id:1,title:'Basic Movies',mediaServerId:'managed-movies',arrAction:0,isActive:true,deleteAfterDays:7,media:[]},{id:2,title:'Basic Shows',mediaServerId:'managed-shows',arrAction:0,isActive:true,deleteAfterDays:7,media:[]}]:[]);
+    if(url.pathname.startsWith('/api/v1/')){
+      if(req.headers['x-api-key']!=='fixture-key')return json({},401);
+      if(url.pathname==='/api/v1/user/jellyfin/viewer')return json({id:7,jellyfinUserId:'viewer',permissions:32});
+      if(url.pathname==='/api/v1/auth/me')return json({id:Number(req.headers['x-api-user']),jellyfinUserId:Number(req.headers['x-api-user'])===7?'viewer':'admin',permissions:32});
+      if(url.pathname==='/api/v1/request'){let rows=(options.requests||[]).filter(row=>row.requestedBy.id===Number(url.searchParams.get('requestedBy')));const filter=url.searchParams.get('filter');if(filter==='deleted')rows=rows.filter(row=>row.media.status===6);if(filter==='pending')rows=rows.filter(row=>row.status===1);if(filter==='processing')rows=rows.filter(row=>row.media.status===3);if(filter==='available')rows=rows.filter(row=>row.media.status===5);const start=Number(url.searchParams.get('skip')||0);return json({results:rows.slice(start,start+20),pageInfo:{results:rows.length}})}
+      const detail=url.pathname.match(/^\/api\/v1\/(movie|tv)\/(\d+)$/);if(detail)return json({id:Number(detail[2]),title:options.titles?.[detail[2]]||'Requested title '+detail[2],name:options.titles?.[detail[2]]||'Requested title '+detail[2]});
+      if(url.pathname.includes('/discover/'))return json({results:[]});return json({},404);
+    }
     if(!auth.includes('secret-token-'))return json({error:'Token missing'},401);
+    const avatarRoute=url.pathname.match(/^\/Users\/([^/]+)\/Images\/Primary$/);if(avatarRoute){if(!auth.includes('secret-token-'+avatarRoute[1]+'"'))return json({error:'Not your picture'},403);if(req.method==='POST'){avatars.set(avatarRoute[1],Buffer.from(raw,'base64'));res.writeHead(204);return res.end()}if(req.method==='DELETE'){avatars.delete(avatarRoute[1]);res.writeHead(204);return res.end()}const image=avatars.get(avatarRoute[1]);if(!image)return json({},404);res.writeHead(200,{'Content-Type':'image/png'});return res.end(image)}
     if(url.pathname==='/Users/Me')return json({Id:auth.includes('secret-token-admin')?'admin':'viewer',Name:'Viewer',Configuration:{AudioLanguagePreference:'eng'},Policy:{IsAdministrator:auth.includes('secret-token-admin'),EnableMediaPlayback:allowPlayback}});
     if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'movies-view',Name:'Main movies',CollectionType:'movies'},{Id:'shows-view',Name:'Main shows',CollectionType:'tvshows'},{Id:'music-view',Name:'Music',CollectionType:'music'}]});
     if(url.pathname==='/Items/Filters2')return json({Genres:[{Name:'Test'}],Years:[2026]});
@@ -28,7 +39,7 @@ export async function startPlaybackFixture(){
     const item=url.pathname.match(/^\/Users\/[^/]+\/Items\/([^/]+)$/);if(item)return json({...movie(item[1]),MediaSources:[{Id:'source1',MediaStreams:streams}],MediaStreams:streams,UserData:{...movie(item[1]).UserData,...userData.get(item[1])},Path:'/private/never-return.mp4'});
     if(url.pathname.endsWith('/Items/Resume'))return json({Items:[movie('movie-direct')]});
     if(url.pathname.endsWith('/Items')){
-      if(url.searchParams.get('IncludeItemTypes')==='BoxSet')return json({Items:[{Id:'collection',Name:'Test Collection',Type:'BoxSet'}],TotalRecordCount:1});
+      if(url.searchParams.get('IncludeItemTypes')==='BoxSet'){const items=[{Id:'collection',Name:'Test Collection',Type:'BoxSet'},...(options.management?[{Id:'managed-movies',Name:'Basic Movies',Type:'BoxSet'},{Id:'managed-shows',Name:'Basic Shows',Type:'BoxSet'}]:[])].filter(item=>!url.searchParams.get('ExcludeItemIds')?.split(',').includes(item.Id));return json({Items:items,TotalRecordCount:items.length})}
       let items=[movie('movie-direct'),movie('movie-hls')].map(item=>({...item,UserData:{...item.UserData,...userData.get(item.Id)}}));
       if(url.searchParams.get('Ids'))items=items.filter(item=>url.searchParams.get('Ids').split(',').includes(item.Id));
       if(url.searchParams.get('ExcludeItemIds'))items=items.filter(item=>!url.searchParams.get('ExcludeItemIds').split(',').includes(item.Id));
@@ -66,5 +77,5 @@ export async function startPlaybackFixture(){
   const child=spawn(process.execPath,[fileURLToPath(new URL('../server.js',import.meta.url))],{env:{...process.env,PORT:'0',CONFIG_DIR:dir,JELLYFIN_URL:service,SEERR_URL:service,MAINTAINERR_URL:service}});
   let logs='';child.stderr.on('data',data=>logs+=data);
   const base=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('App startup timeout '+logs)),10000);child.on('exit',code=>{clearTimeout(timeout);reject(Error('Exited '+code+' '+logs))});child.stdout.on('data',data=>{logs+=data;const match=String(data).match(/running on :(\d+)/);if(match){clearTimeout(timeout);resolve(`http://127.0.0.1:${match[1]}`)}})});
-  return {base,calls,reports,playbackInfo,logs:()=>logs,setAllowed:value=>allowPlayback=value,async close(){if(child.exitCode===null){const done=once(child,'exit');child.kill();await done}upstream.closeAllConnections();await new Promise(resolve=>upstream.close(resolve));await rm(dir,{recursive:true,force:true})}};
+  return {base,calls,reports,playbackInfo,configDir:dir,logs:()=>logs,setAllowed:value=>allowPlayback=value,async close(){if(child.exitCode===null){const done=once(child,'exit');child.kill();await done}upstream.closeAllConnections();await new Promise(resolve=>upstream.close(resolve));await rm(dir,{recursive:true,force:true})}};
 }

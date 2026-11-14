@@ -46,7 +46,7 @@ export function createCarousel({root,api,isCurrent,onSelect,escapeHTML:e,metadat
   }
   function createSlide(item,image){
     const slide=document.createElement('article');slide.className='feature-slide';slide.dataset.featureId=item.Id;
-    slide.innerHTML=`<video class="feature-video" muted playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video><div class="feature-shade"></div><div class="feature-copy"><span class="eyebrow">${data.source==='popular'?'Popular in your library':'From your library'}</span><h2 class="featured-title">${e(item.Name)}</h2>${metadata(item,e)}<p class="feature-overview">${e(item.Overview||'Find your next favorite in your library.')}</p><button class="feature-details" data-details><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle class="info-dot" cx="12" cy="7.5" r=".7"/></svg>More information</button></div>`;
+    slide.innerHTML=`<video class="feature-video" muted playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video><div class="feature-shade"></div><div class="feature-copy"><span class="eyebrow">${data.source==='popular'?'Popular on the server':'On this server'}</span><h2 class="featured-title">${e(item.Name)}</h2>${metadata(item,e)}<p class="feature-overview">${e(item.Overview||'Find your next favorite on the server.')}</p><button class="feature-details" data-details><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle class="info-dot" cx="12" cy="7.5" r=".7"/></svg>More information</button></div>`;
     slide.prepend(image);slide.querySelector('[data-details]').onclick=()=>onSelect(item.Id);return slide;
   }
   async function preview(item,slide,version){
@@ -89,7 +89,7 @@ export function createCarousel({root,api,isCurrent,onSelect,escapeHTML:e,metadat
     const previousId=data?.items[index]?.Id;
     data={...result,items:result.items.slice(0,8)};
     for(const id of images.keys())if(!data.items.some(item=>item.Id===id))images.delete(id);
-    if(!data.items.length){writeFeaturedSnapshot(cacheKey,{items:[]});stopVideo();frame.classList.remove('is-loading');frame.removeAttribute('aria-busy');frame.querySelector(':scope > .sr-only')?.remove();track.innerHTML='<div class="feature-empty"><h2>Your next favorite is waiting.</h2><p class="muted">Featured titles appear here when media is available in your library.</p></div>';dots.replaceChildren();return}
+    if(!data.items.length){writeFeaturedSnapshot(cacheKey,{items:[]});stopVideo();frame.classList.remove('is-loading');frame.removeAttribute('aria-busy');frame.querySelector(':scope > .sr-only')?.remove();track.innerHTML='<div class="feature-empty"><h2>Your next favorite is waiting.</h2><p class="muted">Featured titles appear here when media is available on the server.</p></div>';dots.replaceChildren();return}
     const position=data.items.findIndex(item=>item.Id===previousId);show(position<0?0:position,true);
   }
   async function refresh(){
@@ -98,7 +98,7 @@ export function createCarousel({root,api,isCurrent,onSelect,escapeHTML:e,metadat
       const wasRestoring=restorePending;restorePending=false;
       if(!wasRestoring&&(hovered||transitioning)&&data)pendingData=result;else apply(result);
       hourTimer=setTimeout(refresh,Math.max(1000,Math.min(3600000,result.reshuffleAt-Date.now()+1000)));
-    }catch(error){if(!alive())return;if([401,403].includes(error.status)){writeFeaturedSnapshot(cacheKey,{items:[]});data=null;stopVideo();track.replaceChildren();dots.replaceChildren()}hourTimer=setTimeout(refresh,30000);if(!data){frame.classList.remove('is-loading');frame.removeAttribute('aria-busy');frame.querySelector(':scope > .sr-only')?.remove();track.innerHTML='<div class="feature-empty"><h2>Explore your library.</h2><p class="muted">Featured titles are temporarily unavailable.</p></div>'}}
+    }catch(error){if(!alive())return;if([401,403].includes(error.status)){writeFeaturedSnapshot(cacheKey,{items:[]});data=null;stopVideo();track.replaceChildren();dots.replaceChildren()}hourTimer=setTimeout(refresh,30000);if(!data){frame.classList.remove('is-loading');frame.removeAttribute('aria-busy');frame.querySelector(':scope > .sr-only')?.remove();track.innerHTML='<div class="feature-empty"><h2>Browse the server.</h2><p class="muted">Featured titles are temporarily unavailable.</p></div>'}}
   }
   function synchronize(){lastFrame=performance.now();if(paused())video?.pause();else playVideo()}
   const enter=event=>{if(event.pointerType!=='touch'){hovered=true;synchronize()}};
