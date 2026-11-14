@@ -39,10 +39,10 @@ export function createCarousel({root,api,isCurrent,onSelect,escapeHTML:e,metadat
   }
   async function preview(item,slide,version){
     if(!allowVideo()||!alive()||version!==sequence)return;
-    controller=new AbortController();
+    const requestController=new AbortController();controller=requestController;
     try{
-      const info=await api('/api/preview/'+encodeURIComponent(item.Id),{signal:controller.signal});
-      if(!info.playable||!alive()||version!==sequence)return;
+      const info=await api('/api/preview/'+encodeURIComponent(item.Id),{signal:requestController.signal});
+      if(!info.playable||!alive()||version!==sequence||!allowVideo()||requestController.signal.aborted)return;
       const target=slide.querySelector('video');video=target;target.muted=true;target.src=info.url;
       target.onloadedmetadata=()=>{if(!alive()||version!==sequence)return;if(Number.isFinite(target.duration))target.currentTime=Math.min(info.startSeconds,Math.max(0,target.duration-1));playVideo()};
       target.onplaying=()=>{if(alive()&&version===sequence)target.classList.add('is-playing')};
