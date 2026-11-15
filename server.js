@@ -76,7 +76,8 @@ async function storageStatus(){
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(probe,'',{mode:0o600,flag:'wx'});await fs.rm(probe);return {writable:true}}
   catch(error){await fs.rm(probe,{force:true}).catch(()=>{});return {writable:false,code:error.code,message:storageFailure(error).message}}
 }
-let configSaveQueue=Promise.resolve();
+let configSaveQueue=Promise.resolve(),notifyChatSettings=()=>{};
+function socialStateSignature(value,profile=false){try{return JSON.stringify(Object.entries(JSON.parse(value||'{}')).map(([id,state])=>[id,profile?state.profile:[state.roleIds,state.featurePermissions]]).filter(([,state])=>profile?state:state.some(value=>value!==undefined)))}catch{return value}}
 async function saveConfig(patch){
   const previous=configSaveQueue;let release;configSaveQueue=new Promise(resolve=>release=resolve);
   await previous;
@@ -84,7 +85,8 @@ async function saveConfig(patch){
   const next={...config,...(typeof patch==='function'?patch(config):patch)};
   const tmp=path.join(configDir,`.settings-${crypto.randomBytes(6).toString('hex')}.tmp`);
   try{await fs.mkdir(configDir,{recursive:true});await fs.writeFile(tmp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,configFile)}catch(e){await fs.rm(tmp,{force:true}).catch(()=>{});logger.log('error','settings.save_failed',{code:e.code,configDir});throw storageFailure(e)}
-  const connectionsChanged=[...settingUrls,...settingKeys].some(key=>config[key]!==next[key]);config=next;if(connectionsChanged)refreshIntegrations();
+  const permissionsChanged=config.roles!==next.roles||socialStateSignature(config.userState)!==socialStateSignature(next.userState),profilesChanged=socialStateSignature(config.userState,true)!==socialStateSignature(next.userState,true);
+  const connectionsChanged=[...settingUrls,...settingKeys].some(key=>config[key]!==next[key]);config=next;if(connectionsChanged)refreshIntegrations();if(permissionsChanged||profilesChanged)notifyChatSettings({reset:permissionsChanged});
   logger.setLevel(next.logLevel);logger.log('info','settings.saved');
   }finally{release()}
 }
@@ -174,7 +176,8 @@ const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,js
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
 const registrationAPI=createRegistration({getConfig:()=>config,saveConfig,jf,jellyfin,upstream,authHeader,readBody,json,send,cleanId,logger});
 const presenceAPI=createPresence({getConfig:()=>config,getHubSessions:()=>[...sessions.values()],jf,jellyfin,upstream,authHeader,json,send});
-const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger,send,jf,jellyfin,upstream,authHeader,getMember:presenceAPI.member,reference:presenceAPI.reference});
+const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger,send,jf,jellyfin,upstream,authHeader,getMember:presenceAPI.member,reference:presenceAPI.reference,isSessionActive:user=>[...sessions.values()].includes(user)&&Date.now()-user.created<86400000});
+notifyChatSettings=chatAPI.settingsChanged;
 const roleAPI=createRoles({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId,logger});
 const api = async(req,res,url)=>{
   const method=req.method;
@@ -377,4 +380,4 @@ const server=http.createServer(async(req,res)=>requestContext.run({requestId:cry
 }));
 server.on('error',error=>{console.error(`JellyHub startup failed: ${error.message}`);process.exit(1)});
 server.listen(port,'0.0.0.0',()=>console.log(`JellyHub running on :${server.address().port}`));
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close(()=>process.exit(0));server.closeIdleConnections();setTimeout(()=>process.exit(1),10000).unref()});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{chatAPI.close();server.close(()=>process.exit(0));server.closeIdleConnections();setTimeout(()=>process.exit(1),10000).unref()});

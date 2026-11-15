@@ -166,10 +166,11 @@ async function showRequests(options={}){
 async function showStreams(){
   const revision=++state.revision;state.page='streams';recordRoute('streams');shell();return renderStreams({api,content,escapeHTML,isCurrent:()=>revision===state.revision,setDispose:fn=>disposePage=fn});
 }
-async function showMember(id){const {openMember}=await import('./member-profile.js');return openMember({id,api,escapeHTML,onMessage:showChat,onItem:showItem})}
+async function showMember(id){const revision=state.revision,user=state.user,button=document.querySelector('[data-member="'+id+'"]')||document.querySelector('[data-presence-id="'+id+'"]');button?.setAttribute('aria-busy','true');try{const {openMember}=await import('./member-profile.js');if(revision!==state.revision||user!==state.user)return;return await openMember({id,api,escapeHTML,onMessage:showChat,onItem:showItem,isCurrent:()=>revision===state.revision&&user===state.user})}finally{button?.removeAttribute('aria-busy')}}
 async function showChat(roomId='general'){
+  if(state.page==='chat'&&disposePage.switchRoom){recordRoute('chat'+(roomId==='general'?'':'?room='+encodeURIComponent(roomId)));disposePage.switchRoom(roomId);return}
   const revision=++state.revision,epoch=streamCountEpoch;state.page='chat';recordRoute('chat'+(roomId==='general'?'':'?room='+encodeURIComponent(roomId)));shell();content('<p class="loader">Loading chat…</p>');
-  try{const {mountChat}=await import('./chat.js');if(revision!==state.revision)return;disposePage=mountChat({root:document.querySelector('#content'),api,escapeHTML,roomId,onRoom:showChat,onMember:showMember,getDraft:()=>state.chatDrafts?.[roomId]||'',onDraft:value=>{if(epoch===streamCountEpoch)(state.chatDrafts||={})[roomId]=value},getAttempt:()=>state.chatAttempts?.[roomId],onAttempt:value=>{if(epoch===streamCountEpoch)(state.chatAttempts||={})[roomId]=value}})}catch(error){if(revision===state.revision)content(errorHTML(error))}
+  try{const {mountChat}=await import('./chat.js');if(revision!==state.revision)return;disposePage=mountChat({root:document.querySelector('#content'),api,escapeHTML,roomId,onRoom:showChat,onMember:showMember,getDraft:id=>state.chatDrafts?.[id]||'',onDraft:(value,id)=>{if(epoch===streamCountEpoch)(state.chatDrafts||={})[id]=value},getAttempt:id=>state.chatAttempts?.[id],onAttempt:(value,id)=>{if(epoch===streamCountEpoch)(state.chatAttempts||={})[id]=value}})}catch(error){if(revision===state.revision)content(errorHTML(error))}
 }
 async function startPlayback(itemId,startTicks){
   recordRoute('play/'+encodeURIComponent(itemId)+(startTicks!==undefined?'?startTicks='+startTicks:''));
@@ -178,6 +179,7 @@ async function startPlayback(itemId,startTicks){
   catch(error){if(revision===state.revision)content(errorHTML(error))}
 }
 function navigate(page){
+  if(page==='chat'&&state.page==='chat'&&disposePage.switchRoom)return showChat();
   recordRoute(page==='admin'?'admin/'+state.adminTab:page);
   state.revision++;state.page=page;shell();
   if(page==='home')home();else if(page==='movies')library('Movie');else if(page==='shows')library('Series');
