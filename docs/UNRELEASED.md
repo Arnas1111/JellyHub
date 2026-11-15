@@ -1,5 +1,13 @@
 # Profiles and server browsing — dev release batch
 
+## Offline users and shared chat
+
+- Added a separate muted Offline group with grayscale avatars. Enabled Jellyfin accounts are read from the native account directory, briefly cached and matched against recent sessions. Disabled accounts are excluded. When native visibility is incomplete, unconfirmed users are gray under Other users with unavailable status. Offline accounts do not contribute to the Online count. Sidebar scrolling is preserved across updates.
+- Added Chat navigation and one shared room for signed-in users, with plain-text messages, display names, timestamps, Enter/Shift+Enter behavior and three-second revision-based updates while visible. Existing content is updated by message ID without repeatedly rebuilding the log. The latest 200 messages are saved atomically to `/config/chat.json` with private file permissions.
+- Users can delete their own messages; current administrators can delete any message. Native account/role checks protect every chat request. Authenticated sender identity is assigned server-side, payloads are bounded, posts are rate-limited, retries are idempotent within retained history, and message text is escaped. Raw account IDs and retry IDs are omitted from browser responses.
+- Drafts survive navigation, failed sends preserve their text, and drafts are cleared on logout. Storage/read errors are surfaced and corrupt history is preserved rather than overwritten. Native account authentication failures remove the invalid JellyHub session so revoked accounts cannot keep appearing active through denied chat/presence polls.
+- Local validation covers concurrent writes, retention, restart persistence, retry deduplication, own/admin deletion, corrupt history, two-browser message delivery, literal markup, failed-send retry, mobile layout, offline styling and disabled-user exclusion with simulated Jellyfin. No existing backend containers were modified; deployment behavior still needs live verification.
+
 ## Sidebar online users
 
 - Added a Discord-inspired Online list under sidebar navigation: circular avatars/initials, status dots, display names and watching/paused activity. One row represents one user across multiple devices and Jellyfin GUID formats; active playback takes priority over a paused second device. Rows link to media only when the viewer has Active Streams permission and item access.

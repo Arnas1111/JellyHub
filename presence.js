@@ -20,24 +20,32 @@ export function recentPeople(sessions,now=Date.now()){
   return [...people.values()].map(person=>({...person,state:person.playing?(person.playing.paused?'paused':'watching'):now-person.lastSeen>ACTIVE?'away':'online'}));
 }
 export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,authHeader,json,send,now=Date.now}){
-  const salt=crypto.randomBytes(32),nativeCache=new Map(),avatars=new Map(),members=new Map();
+  const salt=crypto.randomBytes(32),nativeCache=new Map(),directoryCache=new Map(),avatars=new Map(),members=new Map();
   async function nativeSessions(viewer){
     const config=getConfig(),key=crypto.createHash('sha256').update(config.jellyfinUrl+':'+(config.registrationServiceKey||viewer.id+':'+viewer.admin)).digest('hex'),cached=nativeCache.get(key);if(cached&&cached.expires>now())return cached.work;
     const actor=config.registrationServiceKey?{token:config.registrationServiceKey,deviceId:'JellyHub-presence'}:null;
-    const work=(actor?upstream(jellyfin(),'Sessions',{headers:{Authorization:authHeader(actor,actor.deviceId)}}):jf('Sessions',viewer)).then(data=>({sessions:(Array.isArray(data)?data:[]).slice(0,1000).map(session=>({UserId:session.UserId,UserName:session.UserName,LastActivityDate:session.LastActivityDate,LastPlaybackCheckIn:session.LastPlaybackCheckIn,UserPrimaryImageTag:session.UserPrimaryImageTag,NowPlayingItem:session.NowPlayingItem?{Id:session.NowPlayingItem.Id,Name:session.NowPlayingItem.Name,SeriesName:session.NowPlayingItem.SeriesName,Type:session.NowPlayingItem.Type}:null,PlayState:{IsPaused:session.PlayState?.IsPaused}})),partial:!actor&&!viewer.admin})).catch(()=>({sessions:[],partial:true}));
+    const work=(actor?upstream(jellyfin(),'Sessions',{headers:{Authorization:authHeader(actor,actor.deviceId)}}):jf('Sessions',viewer)).then(data=>({sessions:(Array.isArray(data)?data:[]).slice(0,1000).map(session=>({UserId:session.UserId,UserName:session.UserName,LastActivityDate:session.LastActivityDate,LastPlaybackCheckIn:session.LastPlaybackCheckIn,UserPrimaryImageTag:session.UserPrimaryImageTag,NowPlayingItem:session.NowPlayingItem?{Id:session.NowPlayingItem.Id,Name:session.NowPlayingItem.Name,SeriesName:session.NowPlayingItem.SeriesName,Type:session.NowPlayingItem.Type}:null,PlayState:{IsPaused:session.PlayState?.IsPaused}})),partial:!actor&&!viewer.admin,available:true})).catch(()=>({sessions:[],partial:true,available:false}));
     if(nativeCache.size>=50)nativeCache.delete(nativeCache.keys().next().value);nativeCache.set(key,{expires:now()+10000,work});return work;
   }
+  async function directory(viewer){
+    const config=getConfig(),key=crypto.createHash('sha256').update(config.jellyfinUrl+':'+(config.registrationServiceKey||viewer.id+':'+viewer.admin)).digest('hex'),old=directoryCache.get(key);if(old&&old.expires>now())return old.work;
+    const actor=config.registrationServiceKey?{token:config.registrationServiceKey,deviceId:'JellyHub-presence'}:null;
+    const work=(actor?upstream(jellyfin(),'Users?isDisabled=false',{headers:{Authorization:authHeader(actor,actor.deviceId)}}):jf('Users?isDisabled=false',viewer)).then(data=>({users:(Array.isArray(data)?data:[]).filter(user=>validId(user.Id)&&user.Policy?.IsDisabled!==true).slice(0,1000).map(user=>({userId:user.Id,name:String(user.Name||'Member').slice(0,60),imageTag:user.PrimaryImageTag})),partial:!actor&&!viewer.admin})).catch(()=>({users:[],partial:true}));
+    if(directoryCache.size>=50)directoryCache.delete(directoryCache.keys().next().value);directoryCache.set(key,{expires:now()+30000,work});return work;
+  }
   async function presence(viewer){
-    const native=await nativeSessions(viewer),hub=getHubSessions().filter(session=>session.created+86400000>now()).map(session=>({UserId:session.id,UserName:session.name,LastActivityDate:new Date(session.lastActivity||session.created).toISOString()})),people=recentPeople([...native.sessions,...hub],now()),canSeeTitles=featurePermissions(getConfig(),viewer.id,viewer.admin).streams;
-    const output=new Array(Math.min(100,people.length));let cursor=0;
-    const selected=people.sort((a,b)=>Number(!!b.playing)-Number(!!a.playing)||a.name.localeCompare(b.name)).slice(0,100);
+    const [native,roster]=await Promise.all([nativeSessions(viewer),directory(viewer)]),hub=getHubSessions().filter(session=>session.created+86400000>now()).map(session=>({UserId:session.id,UserName:session.name,LastActivityDate:new Date(session.lastActivity||session.created).toISOString()})),people=recentPeople([...native.sessions,...hub],now()),canSeeTitles=featurePermissions(getConfig(),viewer.id,viewer.admin).streams;
+    const activeIds=new Set(people.map(person=>normalized(person.userId))),known=new Map(roster.users.map(person=>[normalized(person.userId),person]));
+    for(const session of getHubSessions())if(roster.partial&&validId(session.id)&&!known.has(normalized(session.id)))known.set(normalized(session.id),{userId:session.id,name:session.name||'Member'});
+    const inactive=[...known.values()].filter(person=>!activeIds.has(normalized(person.userId))).map(person=>({...person,state:native.available&&!native.partial?'offline':'unknown',playing:null})).sort((a,b)=>a.name.localeCompare(b.name));
+    const selected=[...people.sort((a,b)=>Number(!!b.playing)-Number(!!a.playing)||a.name.localeCompare(b.name)).slice(0,100),...inactive.slice(0,100)],output=new Array(selected.length);let cursor=0;
     await Promise.all(Array.from({length:Math.min(6,selected.length)},async()=>{while(cursor<selected.length){
       const index=cursor++,person=selected[index],id=crypto.createHmac('sha256',salt).update(normalized(person.userId)).digest('hex').slice(0,32);let activity=null;
       if(person.playing&&canSeeTitles){try{const item=viewer.admin?person.playing.item:await jf(`Users/${viewer.id}/Items/${person.playing.item.Id}`,viewer);activity={title:String(item.Name||'Video').slice(0,180),series:String(item.SeriesName||'').slice(0,120),itemId:person.playing.item.Id}}catch{/* Playback state is visible without exposing forbidden media titles. */}}
       const profile=profileOf(getConfig(),person.userId),version=crypto.createHash('sha256').update(String(profile.avatarVersion||person.imageTag||'default')).digest('hex').slice(0,12);
       members.set(id,{userId:person.userId,expires:now()+RECENT});output[index]={id,name:profileName(getConfig(),person.userId,person.name),state:person.state,activity,avatar:'/api/presence/avatar/'+id+'?v='+version};
     }}));for(const [key,value]of members)if(value.expires<now())members.delete(key);
-    return {users:output,count:people.length,partial:native.partial,updated:new Date(now()).toISOString()};
+    return {users:output.filter(user=>!['offline','unknown'].includes(user.state)),offline:output.filter(user=>user.state==='offline'),unknown:output.filter(user=>user.state==='unknown'),offlineCount:inactive.filter(user=>user.state==='offline').length,count:people.length,partial:native.partial||roster.partial,updated:new Date(now()).toISOString()};
   }
   async function avatar(userId,viewer){
     const config=getConfig(),version=profileOf(config,userId).avatarVersion||'',cacheKey=userId+':'+version,old=avatars.get(cacheKey);if(old&&old.expires>now())return old.work;

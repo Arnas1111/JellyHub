@@ -22,7 +22,7 @@ export async function startPlaybackFixture(options={}){
       const service=auth.includes('registration-service-secret'),administrator=auth.includes('secret-token-admin');
       if(service&&url.pathname==='/Sessions')return json(options.streams||[]);
       if(service&&/^\/Users\/[^/]+\/Images\/Primary$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
-      if(service&&url.pathname==='/Users')return json([{Name:'viewer'},{Name:'admin'},...[...registeredUsers.values()].map(user=>({Name:user.Name}))]);
+      if(service&&url.pathname==='/Users')return json([{Id:'viewer',Name:'viewer'},{Id:'admin',Name:'admin'},...[...registeredUsers.values()].map(user=>({Id:user.Id,Name:user.Name,Policy:user.Policy})),...(options.presenceDirectory||[])]);
       if(url.pathname==='/Auth/Keys'){
         if(!administrator)return json({},403);
         if(req.method==='POST'){const key={AccessToken:'registration-service-secret',AppName:url.searchParams.get('app')};registrationKeys.push(key);if(options.registrationKey204){res.writeHead(204);return res.end()}return json(key)}

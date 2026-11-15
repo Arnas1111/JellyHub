@@ -20,3 +20,12 @@ test('unavailable native presence retains recent JellyHub activity with a truthf
   const handler=createPresence({getConfig:()=>({}),getHubSessions:()=>[{id:'viewer',name:'Viewer',created:time-1000,lastActivity:time}],now:()=>time,jf:async()=>{throw Error('Offline')},json:(res,status,data)=>Object.assign(res,{status,data})});
   const response={};await handler({method:'GET'},response,new URL('http://local/api/presence'),{id:'viewer'});assert.equal(response.data.count,1);assert.equal(response.data.partial,true);assert.equal(response.data.users[0].state,'online');
 });
+
+test('enabled offline users are listed separately and limited session visibility never invents offline status',async()=>{
+  for(const full of [false,true]){
+    const config={jellyfinUrl:'http://local',registrationServiceKey:full?'server-key':'',userState:JSON.stringify({offline:{profile:{displayName:'Offline Friend'}}})};
+    const source=async route=>route.startsWith('Users')?[{Id:'viewer',Name:'Viewer'},{Id:'offline',Name:'Other'},{Id:'disabled',Name:'Disabled',Policy:{IsDisabled:true}}]:[session('viewer',1000)];
+    const handler=createPresence({getConfig:()=>config,getHubSessions:()=>[],jf:source,upstream:async(base,route)=>source(route),jellyfin:()=>config.jellyfinUrl,authHeader:()=>'',now:()=>time,json:(res,status,data)=>Object.assign(res,{data})});
+    const res={};await handler({method:'GET'},res,new URL('http://local/api/presence'),{id:'viewer',admin:false});assert.equal(res.data.users.length,1);assert.equal(res.data.offline.length,full?1:0);assert.equal(res.data.unknown.length,full?0:1);assert.equal((full?res.data.offline:res.data.unknown)[0].name,'Offline Friend');assert.doesNotMatch(JSON.stringify(res.data),/Disabled/);
+  }
+});

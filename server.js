@@ -1,3 +1,4 @@
+import {createChat} from './chat.js';
 import {createPresence} from './presence.js';
 import {createRegistration} from './registration.js';
 import {createProfiles,profileName,profileOf,featurePermissions} from './profiles.js';
@@ -172,6 +173,7 @@ const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,js
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
 const registrationAPI=createRegistration({getConfig:()=>config,saveConfig,jf,jellyfin,upstream,authHeader,readBody,json,send,cleanId,logger});
 const presenceAPI=createPresence({getConfig:()=>config,getHubSessions:()=>[...sessions.values()],jf,jellyfin,upstream,authHeader,json,send});
+const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
@@ -203,10 +205,14 @@ const api = async(req,res,url)=>{
     s.admin=!!verified.Policy?.IsAdministrator;
     adminOnly(s);
   }
-  if(url.pathname==='/api/active-streams'||url.pathname==='/api/presence'){const verified=await jf('Users/Me',s);s.admin=!!verified.Policy?.IsAdministrator;if(verified.Policy?.IsDisabled)throw Object.assign(Error('This account is disabled.'),{status:403})}
+  if(url.pathname==='/api/active-streams'||url.pathname==='/api/presence'||url.pathname.startsWith('/api/chat')){
+    let verified;try{verified=await jf('Users/Me',s)}catch(error){if([401,403].includes(error.status))sessions.delete(sid);throw error}
+    s.admin=!!verified.Policy?.IsAdministrator;if(verified.Policy?.IsDisabled){sessions.delete(sid);throw Object.assign(Error('This account is disabled.'),{status:403})}
+  }
   const permissions=featurePermissions(config,s.id,s.admin);
   if((url.pathname==='/api/requests'||url.pathname.startsWith('/api/catalog/'))&&!permissions.requests)throw Object.assign(Error('Requests are disabled for this account.'),{status:403});
   if(url.pathname==='/api/active-streams'&&!permissions.streams)throw Object.assign(Error('Active Streams are disabled for this account.'),{status:403});
+  if(await chatAPI(req,res,url,s))return;
   if(await presenceAPI(req,res,url,s))return;
   if(await registrationAPI(req,res,url,s))return;
   if(await featureAPI(req,res,url,s))return;
