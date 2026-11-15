@@ -12,9 +12,9 @@ export function createChatEvents({authorize,canRead,isActive=()=>true}){
     const heartbeat=setInterval(()=>schedule(()=>{if(!res.write(': keep-alive\n\n'))close()}),25000);heartbeat.unref?.();res.on('close',close);
     client.write('ready',{});
   }
-  function notify(roomIds=[],rooms=false,reset=false){for(const client of clients){
+  function notify(roomIds=[],rooms=false,reset=false,roomList=false){for(const client of clients){
     if(!rooms&&!reset&&!roomIds.some(id=>canRead(id,client.user)))continue;
-    client.pending||={roomIds:new Set(),rooms:false,reset:false};for(const id of roomIds)client.pending.roomIds.add(id);client.pending.rooms||=rooms;client.pending.reset||=reset;
+    client.pending||={roomIds:new Set(),rooms:false,reset:false};for(const id of roomIds)client.pending.roomIds.add(id);client.pending.rooms||=rooms||roomList&&roomIds.some(id=>canRead(id,client.user));client.pending.reset||=reset;
     if(client.notifying)continue;client.notifying=true;client.schedule(()=>{
       const pending=client.pending;client.pending=null;client.notifying=false;const visible=[...pending.roomIds].filter(id=>canRead(id,client.user));if(visible.length||pending.rooms||pending.reset)client.write('change',{roomIds:visible,rooms:pending.rooms,reset:pending.reset});
     });

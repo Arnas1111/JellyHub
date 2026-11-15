@@ -1,3 +1,4 @@
+import {createPlaybackWorkspace} from './watch.js';
 import {adminCrown} from './avatars.js';
 import {paintPresence} from './presence.js';
 import {mountLogin} from './login.js';
@@ -28,7 +29,8 @@ async function refreshStreamCount(){
     if(epoch===streamCountEpoch){streamCountController=null;document.querySelectorAll('.stream-count').forEach(badge=>{badge.textContent=state.streamCount??'';badge.hidden=!(state.streamCount>0)});const button=document.querySelector('[data-nav="streams"]');if(button)button.setAttribute('aria-description',state.streamCount===null?'Active stream count unavailable':state.streamCount+' active '+(state.streamCount===1?'stream':'streams'));if(state.user)streamCountTimer=setTimeout(refreshStreamCount,15000)}
   }
 }
-function releasePage(){disposePage();disposePage=()=>{};document.querySelectorAll('.item-actions').forEach(dialog=>dialog.remove())}
+const playbackWorkspace=createPlaybackWorkspace({api,escapeHTML:value=>escapeHTML(value),onPlay:startPlayback,onBrowse:navigate,onItem:id=>{invalidate();showItem(id)},getPreferences:()=>state.preferences||{},getDetails:path=>cached(path,30000)});
+function releasePage(){playbackWorkspace.dock();disposePage();disposePage=()=>{};document.querySelectorAll('.item-actions').forEach(dialog=>dialog.remove())}
 const brandMarkup=()=>`<div class="brand" data-brand><img class="brand-mark" src="${escapeHTML(state.branding.logo||state.branding.favicon)}" alt=""/><span data-brand-text>${escapeHTML(state.branding.name)}</span></div>`;
 const state={user:null,page:'home',adminTab:'general',cache:new Map(),removals:{},revision:0,branding:{title:'JellyHub',name:'jellyhub.',welcome:'Discover your next favorite.',accent:'#9980ff',favicon:'/favicon.svg',logo:'/branding-logo'}};
 const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -60,9 +62,10 @@ function shell(){
   paintPresence(document.querySelector('#online-users'),state.presence,escapeHTML,showItem,showMember);
   if(!streamCountTimer&&!streamCountController)refreshStreamCount();
   document.querySelector('#account').onclick=()=>navigate('account');document.querySelector('#account').onpointerenter=()=>Promise.all(['/api/profile','/api/account','/api/preferences','/api/bookmarks','/api/hidden-items','/api/profile/presets'].map(path=>cached(path,30000).catch(()=>{})));
-  document.querySelector('#logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{state.revision++;history.replaceState(null,'','#home');state.page='home';state.adminTab='general';login()}};
+  document.querySelector('#logout').onclick=async()=>{try{await Promise.race([playbackWorkspace.stop(),new Promise(resolve=>setTimeout(resolve,1500))]);await api('/api/logout',{method:'POST'})}finally{state.revision++;history.replaceState(null,'','#home');state.page='home';state.adminTab='general';login()}};
 }
 function login(message=''){
+  playbackWorkspace.stop();
   stopStreamCount();
   releasePage();
   clearFeaturedSnapshots();state.chatDrafts={};state.chatAttempts={};state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
@@ -175,10 +178,9 @@ async function showChat(roomId='general'){
 }
 async function startPlayback(itemId,startTicks){
   recordRoute('play/'+encodeURIComponent(itemId)+(startTicks!==undefined?'?startTicks='+startTicks:''));
-  const revision=++state.revision;state.page='player';shell();content('<p class="loader">Preparing playback…</p>');
-  try{const {mountPlayer}=await import('./player.js');if(revision!==state.revision)return;disposePage=mountPlayer({root:document.querySelector('#content'),api,itemId,startTicks,escapeHTML,onClose:()=>{invalidate();showItem(itemId)},onPlay:id=>{invalidate();startPlayback(id,0)}})}
-  catch(error){if(revision===state.revision)content(errorHTML(error))}
+  state.revision++;state.page='player';shell();const pending=playbackWorkspace.play(itemId,startTicks);playbackWorkspace.show(document.querySelector('#content'));try{await pending}catch(error){if(state.page==='player')content(errorHTML(error))}
 }
+
 function navigate(page){
   if(page==='admin'&&state.adminTab==='roles')state.adminTab='users';
   if(page==='chat'&&state.page==='chat'&&disposePage.switchRoom)return showChat();

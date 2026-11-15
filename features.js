@@ -9,6 +9,8 @@ export const editablePolicies=['IsAdministrator','IsDisabled','IsHidden','Enable
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 const normalizedId=id=>String(id||'').replaceAll('-','').toLowerCase();
 const numberId=id=>{const value=Number(id);if(!Number.isSafeInteger(value)||value<1)fail(400,'Invalid media ID');return value};
+// Match Seerr's own frontend: spaces use %20, rather than form-encoded '+'.
+const seerrSearchQuery=(query,page)=>`page=${page}&query=${encodeURIComponent(query).replace(/[()!*]/g,char=>'%'+char.charCodeAt(0).toString(16).toUpperCase())}`;
 const userDto=user=>({id:user.Id,name:user.Name,policy:Object.fromEntries([...editablePolicies,'EnabledFolders'].map(k=>[k,user.Policy?.[k]??(k==='EnabledFolders'?[]:false)])),lastLogin:user.LastLoginDate||null});
 const canRequest=(permissions,type)=>[2,32,type==='movie'?262144:524288].some(bit=>(permissions&bit)!==0);
 
@@ -156,7 +158,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       const page=Number(url.searchParams.get('page')||1);if(!Number.isSafeInteger(page)||page<1||page>500)fail(400,'Search page must be between 1 and 500.');
       const query=(url.searchParams.get('q')||'').trim().slice(0,120);if(!query){json(res,200,{library:[],catalog:[],errors:[]});return true}
       const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,StartIndex:String((page-1)*60),Limit:'60',EnableTotalRecordCount:'true',Fields:'ProviderIds,ProductionYear,Overview'});
-      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{if(!featurePermissions(getConfig(),session.id,session.admin).requests)return {items:[],pages:1};const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:String(page)}),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
+      const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{if(!featurePermissions(getConfig(),session.id,session.admin).requests)return {items:[],pages:1};const identity=await seerrIdentity(session);const found=await seerr('search?'+seerrSearchQuery(query,page),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
       const library=results[0].status==='fulfilled'?results[0].value.Items||[]:[];
       let catalog=[],matched=[];if(results[1].status==='fulfilled'){let matches=library;try{matches=[...library,...await libraryMatches(session,results[1].value.items.map(item=>item.id))]}catch{/* Search results still work if the optional cross-page matching query fails. */}catalog=attachLibrary(results[1].value.items,matches);const linked=new Set(catalog.map(item=>item.libraryId).filter(Boolean));matched=matches.filter(item=>linked.has(item.Id))}
       const localResults=[...new Map([...library,...matched].map(item=>[item.Id,item])).values()];

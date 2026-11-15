@@ -11,7 +11,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createLogger, logLevels, requestContext, upstreamFailure } from './diagnostics.js';
+import { createLogger, logLevels, requestContext, upstreamFailure ,readValidationFields} from './diagnostics.js';
 import { brandingDefaults, createFeatures } from './features.js';
 import { createMedia } from './media.js';
 import { createPlayback } from './playback.js';
@@ -141,18 +141,18 @@ async function upstream(base, route, {headers={},method='GET',body,timeout=8000,
   const endpoint=target.origin+target.pathname;
   const started=Date.now();
   const keyConfigured=!!headers['X-Api-Key'];
-  let status;
+  let status,validation=[];
   try {
     const response=await fetch(target,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,redirect:'manual'});
     status=response.status;
-    if(!response.ok)throw Object.assign(new Error('HTTP failure'),{code:'HTTP_ERROR'});
+    if(!response.ok){if(status===400)validation=await readValidationFields(response);else await response.body?.cancel();throw Object.assign(new Error('HTTP failure'),{code:'HTTP_ERROR'})}
     const raw=await response.text();let data=null;
     if(raw&&expectJson){try{data=JSON.parse(raw)}catch{throw Object.assign(new Error('Invalid JSON response'),{code:'INVALID_RESPONSE'})}}
     logger.log('debug','upstream.completed',{endpoint,method,httpStatus:status,durationMs:Date.now()-started,keyConfigured});
     return data;
   } catch(error){
     const code=controller.signal.aborted?'TIMEOUT':error.code||error.cause?.code||'NETWORK_ERROR';
-    const diagnostics=upstreamFailure({endpoint,method,status,code,durationMs:Date.now()-started,keyConfigured,requestId:requestContext.getStore()?.requestId});
+    const diagnostics=upstreamFailure({endpoint,method,status,code,validation,durationMs:Date.now()-started,keyConfigured,requestId:requestContext.getStore()?.requestId});
     logger.log('warn','upstream.failed',diagnostics);
     throw Object.assign(new Error(diagnostics.message),{status:status>=400?status:502,code,diagnostics});
   } finally {clearTimeout(timer)}

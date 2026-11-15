@@ -1,0 +1,61 @@
+// The video stays in this body-level host while page content is replaced.
+export function createPlaybackWorkspace({api,escapeHTML:e,onPlay,onBrowse,onItem,getPreferences,getDetails}){
+  let current,target,observer;
+  function position(){
+    const slot=target?.querySelector('.watch-video-slot');if(!current||!slot?.isConnected)return;
+    const box=slot.getBoundingClientRect();current.host.style.setProperty('--playback-left',box.left+'px');Object.assign(current.host.style,{left:box.left+window.scrollX+'px',top:box.top+window.scrollY+'px',width:box.width+'px',height:box.height+'px'});
+  }
+  function dock(){
+    observer?.disconnect();observer=null;target=null;if(!current)return;
+    if(document.fullscreenElement&&current.host.contains(document.fullscreenElement))document.exitFullscreen().catch(()=>{});
+    current.host.classList.add('player-docked');for(const key of ['left','top','width','height'])current.host.style[key]='';current.dispose?.setDocked(true);
+  }
+  function stop(){
+    const entry=current;if(!entry)return Promise.resolve();current=null;observer?.disconnect();observer=null;target=null;
+    const stopped=entry.dispose?.();entry.host.remove();return Promise.resolve(stopped);
+  }
+  function tools(entry){
+    const bar=document.createElement('div');bar.className='player-browse-tools';bar.innerHTML='<button type="button" data-watch-restore>Return to player</button><button type="button" data-watch-browse>Browse while watching</button>';
+    bar.querySelector('[data-watch-restore]').onclick=()=>onPlay(entry.itemId);bar.querySelector('[data-watch-browse]').onclick=()=>onBrowse('home');entry.host.append(bar);
+  }
+  async function play(itemId,startTicks){
+    if(current?.itemId===itemId&&startTicks===undefined)return;
+    stop();const host=document.createElement('div');host.id='persistent-player';host.className='playback-host player-docked';const entry=current={itemId,host,info:null,queue:[],season:null};document.body.append(host);
+    const {mountPlayer}=await import('./player.js');if(current!==entry)return;
+    entry.dispose=mountPlayer({root:host,api,itemId,startTicks,escapeHTML:e,onPlay,
+      onClose:()=>{if(current!==entry)return;const returnToDetails=target?.isConnected;stop();if(returnToDetails)onItem(entry.itemId)},
+      onReady:info=>{if(current!==entry)return;entry.itemId=info.item.id;entry.info=info;entry.queue=info.episodes||[];entry.season=info.seasonId;paint(entry);getDetails('/api/details/'+encodeURIComponent(info.item.id)).then(details=>{if(current!==entry)return;entry.details=details;paintInfo(entry);if(!info.episodes.length)paintQueue(entry)}).catch(()=>{})}
+    });tools(entry);entry.dispose.setDocked(!target);position();
+  }
+  function paintInfo(entry){
+    if(current!==entry||!target?.isConnected||!entry.info)return;const root=target.querySelector('.watch-information'),item=entry.info.item,details=entry.details?.item;
+    root.innerHTML=`<div class="eyebrow">Now playing</div><h1>${e(item.series?item.series+' · '+item.name:item.name)}</h1><p class="muted">${[item.year,item.rating,...(item.genres||[])].filter(Boolean).map(e).join(' · ')}</p>${details?.Overview?`<p class="watch-overview">${e(details.Overview)}</p>`:''}<button class="ghost" data-watch-details>More information</button>`;root.querySelector('[data-watch-details]').onclick=()=>onItem(entry.itemId);
+  }
+  function episodeRows(entry,filter=''){
+    const list=target?.querySelector('.watch-episode-list');if(!list||current!==entry)return;const prefs=getPreferences();
+    list.innerHTML=entry.queue.filter(episode=>(prefs.spoilerGuard&&!episode.played?'Episode '+episode.episode:episode.name).toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase())).map(episode=>`<button class="watch-episode ${episode.id===entry.itemId?'current':''}" data-watch-episode="${e(episode.id)}" aria-current="${episode.id===entry.itemId?'true':'false'}"><span class="watch-episode-art">${episode.image&&(!prefs.spoilerGuard||episode.played)?`<img src="/api/image/${encodeURIComponent(episode.id)}" alt="" loading="lazy"/>`:`<span>${e(episode.episode||'▶')}</span>`}</span><span><small>S${episode.season||1} · E${episode.episode||'?'}</small><strong>${e(prefs.spoilerGuard&&!episode.played?'Episode '+episode.episode:episode.name)}</strong>${episode.played?'<small>Watched</small>':''}</span></button>`).join('')||'<p class="muted">No episodes found.</p>';
+    list.querySelectorAll('[data-watch-episode]').forEach(button=>button.onclick=()=>onPlay(button.dataset.watchEpisode,0));
+  }
+  function paintQueue(entry){
+    if(current!==entry||!target?.isConnected||!entry.info)return;const root=target.querySelector('.watch-queue');
+    if(!entry.info.seasons?.length&&!entry.queue.length){
+      const similar=entry.details?.similar||[];root.innerHTML=`<h2>${similar.length?'More like this':'Keep exploring'}</h2><div class="watch-related">${similar.slice(0,12).map(item=>`<button class="watch-episode" data-related="${e(item.Id)}"><strong>${e(item.Name)}</strong></button>`).join('')}</div><button class="ghost" data-browse="movies">Browse movies</button><button class="ghost" data-browse="shows">Browse TV shows</button>`;
+      root.querySelectorAll('[data-related]').forEach(button=>button.onclick=()=>onItem(button.dataset.related));root.querySelectorAll('[data-browse]').forEach(button=>button.onclick=()=>onBrowse(button.dataset.browse));return;
+    }
+    root.innerHTML=`<h2>Episodes</h2>${entry.info.seasons?.length?`<label class="watch-season">Season<select class="input" aria-label="Watch season">${entry.info.seasons.map(season=>`<option value="${e(season.id)}" ${season.id===entry.season?'selected':''}>${e(season.name)}</option>`).join('')}</select></label>`:''}<label class="sr-only" for="watch-episode-filter">Filter episodes</label><input class="input" id="watch-episode-filter" placeholder="Filter episodes" type="search"/><div class="watch-episode-list"></div><button class="ghost" data-watch-more ${entry.queue.length<100?'hidden':''}>Load more episodes</button><p class="feedback" role="status"></p>`;
+    const filter=root.querySelector('#watch-episode-filter');filter.oninput=()=>episodeRows(entry,filter.value);episodeRows(entry);
+    let loading=false;
+    const load=async(more=false)=>{
+      if(loading)return;loading=true;const season=root.querySelector('select')?.value||entry.season,button=root.querySelector('[data-watch-more]');button.disabled=true;
+      try{const data=await api(`/api/playback/${entry.info.id}/episodes?`+new URLSearchParams({seasonId:season,start:String(more?entry.queue.length:0)}));if(current!==entry||!root.isConnected)return;entry.season=season;entry.queue=more?[...entry.queue,...data.episodes]:data.episodes;button.hidden=entry.queue.length>=data.total;episodeRows(entry,filter.value);root.querySelector('.feedback').textContent=''}catch(error){if(root.isConnected)root.querySelector('.feedback').textContent=error.message}finally{loading=false;button.disabled=false}
+    };
+    const select=root.querySelector('select');if(select)select.onchange=()=>load();root.querySelector('[data-watch-more]').onclick=()=>load(true);
+  }
+  function paint(entry){paintInfo(entry);paintQueue(entry)}
+  function show(root){
+    if(!current)return;target=root;root.innerHTML='<section class="watch-layout"><div class="watch-video-slot" aria-label="Playback area"></div><aside class="watch-queue"><h2>Now playing</h2><p class="muted">Preparing playback...</p></aside></section><section class="watch-information"></section>';
+    current.host.classList.remove('player-docked');current.dispose?.setDocked(false);observer?.disconnect();observer=new ResizeObserver(position);observer.observe(root.querySelector('.watch-video-slot'));position();paint(current);
+  }
+  window.addEventListener('resize',position);
+  return {play,show,dock,stop,get active(){return !!current},get itemId(){return current?.itemId}};
+}

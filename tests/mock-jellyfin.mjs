@@ -47,6 +47,7 @@ export async function startPlaybackFixture(options={}){
     if(url.pathname==='/api/collections/overlay-data')return json(options.management?[{id:1,title:'Basic Movies',mediaServerId:'managed-movies',arrAction:0,isActive:true,deleteAfterDays:7,media:[]},{id:2,title:'Basic Shows',mediaServerId:'managed-shows',arrAction:0,isActive:true,deleteAfterDays:7,media:[]}]:[]);
     if(url.pathname.startsWith('/api/v1/')){
       if(req.headers['x-api-key']!=='fixture-key')return json({},401);
+      if(url.pathname==='/api/v1/search'){if(options.searchError||options.strictSearchEncoding&&req.url.includes('+'))return json({errors:[{path:'.query.query',message:'must match URL encoding format',value:'private query value'}]},400);return json({results:options.searchResults||[],totalPages:1})}
       if(url.pathname==='/api/v1/user/jellyfin/viewer')return json({id:7,jellyfinUserId:'viewer',permissions:options.seerrPermissions??32});
       if(url.pathname==='/api/v1/user/jellyfin/admin')return json({id:1,jellyfinUserId:'admin',permissions:2});
       if(url.pathname==='/api/v1/auth/me')return json({id:Number(req.headers['x-api-user']),jellyfinUserId:Number(req.headers['x-api-user'])===7?'viewer':'admin',permissions:Number(req.headers['x-api-user'])===7?(options.seerrPermissions??32):2});
