@@ -176,7 +176,7 @@ const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,js
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
 const registrationAPI=createRegistration({getConfig:()=>config,saveConfig,jf,jellyfin,upstream,authHeader,readBody,json,send,cleanId,logger});
 const presenceAPI=createPresence({getConfig:()=>config,getHubSessions:()=>[...sessions.values()],jf,jellyfin,upstream,authHeader,json,send});
-const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger,send,jf,jellyfin,upstream,authHeader,getMember:presenceAPI.member,reference:presenceAPI.reference,isSessionActive:user=>[...sessions.values()].includes(user)&&Date.now()-user.created<86400000});
+const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger,send,jf,jellyfin,upstream,authHeader,getMember:presenceAPI.member,reference:presenceAPI.reference,getAdministrator:presenceAPI.isAdministrator,isSessionActive:user=>[...sessions.values()].includes(user)&&Date.now()-user.created<86400000});
 notifyChatSettings=chatAPI.settingsChanged;
 const roleAPI=createRoles({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId,logger});
 const api = async(req,res,url)=>{

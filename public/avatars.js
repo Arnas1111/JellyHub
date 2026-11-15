@@ -1,0 +1,1 @@
+export function adminCrown(admin){return admin?'<span class="admin-crown" role="img" aria-label="Jellyfin administrator" title="Jellyfin administrator"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m2 5 4.5 4L10 3l3.5 6L18 5l-2 10H4L2 5Zm2.5 12h11"/></svg></span>':''}

@@ -30,9 +30,10 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
   async function directory(viewer){
     const config=getConfig(),key=crypto.createHash('sha256').update(config.jellyfinUrl+':'+(config.registrationServiceKey||viewer.id+':'+viewer.admin)).digest('hex'),old=directoryCache.get(key);if(old&&old.expires>now())return old.work;
     const actor=config.registrationServiceKey?{token:config.registrationServiceKey,deviceId:'JellyHub-presence'}:null;
-    const work=(actor?upstream(jellyfin(),'Users?isDisabled=false',{headers:{Authorization:authHeader(actor,actor.deviceId)}}):jf('Users?isDisabled=false',viewer)).then(data=>({users:(Array.isArray(data)?data:[]).filter(user=>validId(user.Id)&&user.Policy?.IsDisabled!==true).slice(0,1000).map(user=>({userId:user.Id,name:String(user.Name||'Member').slice(0,60),imageTag:user.PrimaryImageTag})),partial:!actor&&!viewer.admin})).catch(()=>({users:[],partial:true}));
+    const work=(actor?upstream(jellyfin(),'Users?isDisabled=false',{headers:{Authorization:authHeader(actor,actor.deviceId)}}):jf('Users?isDisabled=false',viewer)).then(data=>({users:(Array.isArray(data)?data:[]).filter(user=>validId(user.Id)&&user.Policy?.IsDisabled!==true).slice(0,1000).map(user=>({userId:user.Id,name:String(user.Name||'Member').slice(0,60),imageTag:user.PrimaryImageTag,admin:typeof user.Policy?.IsAdministrator==='boolean'?user.Policy.IsAdministrator:undefined})),partial:!actor&&!viewer.admin})).catch(()=>({users:[],partial:true}));
     if(directoryCache.size>=50)directoryCache.delete(directoryCache.keys().next().value);directoryCache.set(key,{expires:now()+30000,work});return work;
   }
+  function administrator(id,viewer,roster){const key=normalized(id);if(key===normalized(viewer.id))return !!viewer.admin;return roster.users.find(user=>normalized(user.userId)===key)?.admin??getHubSessions().find(user=>normalized(user.id)===key)?.admin??false}
   async function presence(viewer){
     const [native,roster]=await Promise.all([nativeSessions(viewer),directory(viewer)]),hub=getHubSessions().filter(session=>session.created+86400000>now()).map(session=>({UserId:session.id,UserName:session.name,LastActivityDate:new Date(session.lastActivity||session.created).toISOString()})),people=recentPeople([...native.sessions,...hub],now()),canSeeTitles=featurePermissions(getConfig(),viewer.id,viewer.admin).streams;
     const activeIds=new Set(people.map(person=>normalized(person.userId))),known=new Map(roster.users.map(person=>[normalized(person.userId),person]));
@@ -43,7 +44,7 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
       const index=cursor++,person=selected[index],id=crypto.createHmac('sha256',salt).update(normalized(person.userId)).digest('hex').slice(0,32);let activity=null;
       if(person.playing&&canSeeTitles){try{const item=viewer.admin?person.playing.item:await jf(`Users/${viewer.id}/Items/${person.playing.item.Id}`,viewer);activity={title:String(item.Name||'Video').slice(0,180),series:String(item.SeriesName||'').slice(0,120),itemId:person.playing.item.Id}}catch{/* Playback state is visible without exposing forbidden media titles. */}}
       const profile=profileOf(getConfig(),person.userId),version=crypto.createHash('sha256').update(String(profile.avatarVersion||person.imageTag||'default')).digest('hex').slice(0,12);
-      members.set(id,{userId:person.userId,name:person.name,expires:now()+RECENT});output[index]={id,name:profileName(getConfig(),person.userId,person.name),state:person.state,activity,avatar:'/api/presence/avatar/'+id+'?v='+version};
+      members.set(id,{userId:person.userId,name:person.name,expires:now()+RECENT});output[index]={id,admin:administrator(person.userId,viewer,roster),name:profileName(getConfig(),person.userId,person.name),state:person.state,activity,avatar:'/api/presence/avatar/'+id+'?v='+version};
     }}));for(const [key,value]of members)if(value.expires<now())members.delete(key);
     return {users:output.filter(user=>!['offline','unknown'].includes(user.state)),offline:output.filter(user=>user.state==='offline'),unknown:output.filter(user=>user.state==='unknown'),offlineCount:inactive.filter(user=>user.state==='offline').length,count:people.length,partial:native.partial||roster.partial,updated:new Date(now()).toISOString()};
   }
@@ -64,6 +65,7 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
     return false;
   };
   handler.reference=(userId,name='Member')=>{const id=crypto.createHmac('sha256',salt).update(normalized(userId)).digest('hex').slice(0,32);members.set(id,{userId,name,expires:now()+RECENT});return id};
-  handler.member=async(id,viewer)=>{await presence(viewer);const member=members.get(id);if(!member||member.expires<now())fail(404,'Member unavailable.');const roster=await directory(viewer),person=roster.users.find(person=>normalized(person.userId)===normalized(member.userId))||(roster.partial?getHubSessions().find(person=>normalized(person.id)===normalized(member.userId)):null);if(!person)fail(404,'Member unavailable.');return {userId:member.userId,name:member.name||person.name||'Member'}};
+  handler.member=async(id,viewer)=>{await presence(viewer);const member=members.get(id);if(!member||member.expires<now())fail(404,'Member unavailable.');const roster=await directory(viewer),person=roster.users.find(person=>normalized(person.userId)===normalized(member.userId))||(roster.partial?getHubSessions().find(person=>normalized(person.id)===normalized(member.userId)):null);if(!person)fail(404,'Member unavailable.');return {userId:member.userId,admin:administrator(member.userId,viewer,roster),name:member.name||person.name||'Member'}};
+  handler.isAdministrator=async(id,viewer)=>administrator(id,viewer,await directory(viewer));
   return handler;
 }
