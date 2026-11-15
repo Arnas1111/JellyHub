@@ -1,16 +1,18 @@
 import crypto from 'node:crypto';
 
-export const preferenceDefaults={autoPause:true,autoResume:false,autoNext:true,autoSkipIntro:false,autoSkipOutro:false,spoilerGuard:false,qualityTags:true,showStartInfo:true,keyboard:true,subtitleSize:100,subtitleColor:'#ffffff',subtitleBackground:false,subtitlePosition:90,subtitleOutline:true,volume:80,muted:false,rate:1};
+export const preferenceDefaults={autoPause:false,autoResume:false,autoNext:true,autoSkipIntro:false,autoSkipOutro:false,spoilerGuard:false,qualityTags:true,showStartInfo:true,keyboard:true,subtitleSize:100,subtitleColor:'#ffffff',subtitleBackground:false,subtitlePosition:90,subtitleOutline:true,volume:80,muted:false,rate:1};
 const boolKeys=Object.entries(preferenceDefaults).filter(([,value])=>typeof value==='boolean').map(([key])=>key);
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
 function parseState(config){try{const value=JSON.parse(config.userState||'{}');return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}catch{return {}}}
 export function createPersonalization({getConfig,saveConfig,jf,json,readBody,cleanId}){
   const profile=userId=>parseState(getConfig())[userId]||{};
+  // Older profiles inherited auto-pause without choosing it. Reset that old default once.
+  const preferences=userId=>{const {backgroundPlaybackConfigured,...saved}=profile(userId).preferences||{};return {...preferenceDefaults,...saved,autoPause:backgroundPlaybackConfigured===true?saved.autoPause===true:false}};
   const update=(userId,mutate)=>saveConfig(config=>{const state=parseState(config);state[userId]=mutate(state[userId]||{});return {userState:JSON.stringify(state)}});
   return async(req,res,url,user)=>{
     const path=url.pathname;
     if(path==='/api/preferences'){
-      if(req.method==='GET'){json(res,200,{...preferenceDefaults,...profile(user.id).preferences});return true}
+      if(req.method==='GET'){json(res,200,preferences(user.id));return true}
       if(req.method!=='PUT')fail(405,'Method not allowed');
       const input=await readBody(req),patch={};
       for(const [key,value]of Object.entries(input)){
@@ -20,7 +22,7 @@ export function createPersonalization({getConfig,saveConfig,jf,json,readBody,cle
           const range={subtitleSize:[50,200],subtitlePosition:[10,100],volume:[0,100],rate:[.25,3]}[key];if(value<range[0]||value>range[1])fail(400,'Invalid preference: '+key);patch[key]=value;
         }else fail(400,'Invalid preference: '+key);
       }
-      await update(user.id,state=>({...state,preferences:{...state.preferences,...patch}}));json(res,200,{...preferenceDefaults,...profile(user.id).preferences});return true;
+      await update(user.id,state=>({...state,preferences:{...state.preferences,...patch,...(Object.hasOwn(patch,'autoPause')?{backgroundPlaybackConfigured:true}:{})}}));json(res,200,preferences(user.id));return true;
     }
     if(path==='/api/bookmarks'){
       if(req.method==='GET'){

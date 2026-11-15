@@ -1,6 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startPlaybackFixture } from './mock-jellyfin.mjs';
+import { createPersonalization } from '../personalization.js';
+
+test('old automatic-pause defaults reset once and a new explicit choice persists',async()=>{
+  let config={userState:JSON.stringify({viewer:{preferences:{autoPause:true,volume:45}}})},output;
+  const route=createPersonalization({getConfig:()=>config,saveConfig:async mutate=>{config={...config,...mutate(config)}},json:(_res,_status,body)=>output=body,readBody:async req=>req.body});
+  const request=async(method,body)=>{await route({method,body},{},new URL('http://test/api/preferences'),{id:'viewer'});return output};
+  assert.equal((await request('GET')).autoPause,false);assert.equal(output.volume,45);
+  assert.equal((await request('PUT',{volume:60})).autoPause,false);
+  assert.equal((await request('PUT',{autoPause:true})).autoPause,true);
+  assert.equal((await request('GET')).autoPause,true);assert.equal(output.volume,60);
+  assert.equal(Object.hasOwn(output,'backgroundPlaybackConfigured'),false);
+  assert.equal((await request('PUT',{autoPause:false})).autoPause,false);
+});
 
 test('preferences and bookmarks are validated, durable and private to the signed-in account',async t=>{
   const fixture=await startPlaybackFixture();t.after(()=>fixture.close());
