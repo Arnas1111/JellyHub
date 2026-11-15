@@ -21,6 +21,8 @@ try{
       assert.deepEqual(geometry.button,before,mode+': hover/focus must not shift '+geometry.name);
     }
   };
+  for(const name of ['Chapters','Episodes','Audio, subtitles and quality']){const button=page.getByRole('button',{name,exact:true});await button.click();await page.locator('.player-panel').waitFor({state:'visible'});assert.equal(await button.getAttribute('aria-expanded'),'true');await button.click();await page.locator('.player-panel').waitFor({state:'hidden'});assert.equal(await button.getAttribute('aria-expanded'),'false')}
+  await page.getByRole('button',{name:'Chapters',exact:true}).click();await page.getByRole('button',{name:'Audio, subtitles and quality',exact:true}).click();await page.getByRole('heading',{name:'Playback settings',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Chapters',exact:true}).getAttribute('aria-expanded'),'false');await page.locator('[data-action=close-panel]').click();
   await aligned('embedded');await page.locator('[data-action=mute]').click();await page.locator('[data-icon=muted]').waitFor();
   await page.locator('[data-action=settings]').click();await page.locator('.player-panel').waitFor({state:'visible'});await aligned('settings panel');await page.locator('[data-action=close-panel]').click();
   await page.screenshot({path:'.tools/player-controls-desktop.png',fullPage:true});

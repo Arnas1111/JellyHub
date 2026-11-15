@@ -39,7 +39,7 @@ try{
   assert.equal(await page.locator('.main-video').evaluate(video=>video.currentTime),chosenPosition,'Repeated metadata must not restore the original resume time');
   assert.equal(await page.locator('.main-video').evaluate(video=>video.paused),true);
   await page.locator('#playback-seek').focus();await page.keyboard.press('ArrowRight');await page.waitForFunction(previous=>document.querySelector('.main-video').currentTime>previous,chosenPosition);
-  await page.getByRole('button',{name:'Bookmark this moment',exact:true}).click();await page.getByText('Bookmark saved at',{exact:false}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Bookmark this moment',exact:true}).count(),0);
   assert.ok(fixture.reports.some(report=>report.path==='/Sessions/Playing'));
   await page.getByRole('button',{name:'Audio, subtitles and quality',exact:true}).click();await page.getByLabel('Subtitles',{exact:true}).selectOption('3');
   await page.waitForFunction(()=>document.querySelector('.main-video track')?.track?.mode==='showing');
@@ -70,5 +70,5 @@ try{
   await page.goto(fixture.base+'/#item/0123456789abcdef0123456789abcdef');await page.getByRole('heading',{name:'Direct Test Movie',exact:true}).waitFor();await page.getByRole('button',{name:'Resume',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.main-video')?.videoWidth>0&&document.querySelector('.main-video').currentTime>2);assert.equal(await page.locator('.player-method').textContent(),'Transcoding');
   assert.ok(urls.every(url=>!url.includes('must-never-reach-browser')&&!url.includes('secret-token-')),'Tokens must never appear in browser URLs');
   assert.deepEqual(errors,[]);
-  console.log('Player browser checks passed: real MP4/HLS previews without watch-progress changes, preview cleanup, drag/keyboard seeking without snap-back, resume, native segment skip, pause, bookmarks, subtitles, audio/quality renegotiation and stop/encoding cleanup. Jellyfin API is simulated; fixtures generated locally.');
+  console.log('Player browser checks passed: real MP4/HLS previews without watch-progress changes, preview cleanup, drag/keyboard seeking without snap-back, resume, native segment skip, pause, subtitles, audio/quality renegotiation and stop/encoding cleanup. Jellyfin API is simulated; fixtures generated locally.');
 }finally{await browser?.close();await fixture.close()}

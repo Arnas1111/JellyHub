@@ -11,6 +11,13 @@ function technical(item){
   const video=streams.find(s=>s.Type==='Video');
   return {video:video?{codec:video.Codec,width:video.Width,height:video.Height,range:video.VideoRange}:null,audio:[...new Set(streams.filter(s=>s.Type==='Audio').map(s=>s.Language||s.DisplayTitle||s.Codec))],subtitles:[...new Set(streams.filter(s=>s.Type==='Subtitle').map(s=>s.Language||s.DisplayTitle||'Unknown'))]};
 }
+export function relatedTitles(source,candidates){
+  const key=value=>String(value||'').trim().toLocaleLowerCase();
+  const names=values=>new Set(values.map(key).filter(Boolean));
+  const genres=names(source.Genres||[]),directors=names((source.People||[]).filter(p=>p.Type==='Director').map(p=>p.Name)),cast=names((source.People||[]).filter(p=>p.Type==='Actor').slice(0,12).map(p=>p.Name)),studios=names((source.Studios||[]).map(s=>s.Name)),seen=new Set([source.Id]);
+  const overlap=(values,set)=>new Set(values.map(key).filter(value=>set.has(value))).size;
+  return candidates.filter(item=>{if(!item.Id||seen.has(item.Id)||item.IsMissing||item.IsVirtualItem||!['Movie','Series'].includes(item.Type)||['Movie','Series'].includes(source.Type)&&item.Type!==source.Type)return false;seen.add(item.Id);return true}).map((item,index)=>({item,index,score:overlap(item.Genres||[],genres)*3+overlap((item.People||[]).filter(p=>p.Type==='Director').map(p=>p.Name),directors)*6+Math.min(4,overlap((item.People||[]).filter(p=>p.Type==='Actor').map(p=>p.Name),cast))+Math.min(2,overlap((item.Studios||[]).map(s=>s.Name),studios))})).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,12).map(row=>row.item);
+}
 export function createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig=()=>({})}){
   const tickets=new Map();
   async function playableItem(id,session){
@@ -36,7 +43,7 @@ export function createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig=
       const episodeStart=Number(url.searchParams.get('episodeStart')||0);if(!Number.isSafeInteger(episodeStart)||episodeStart<0||episodeStart>500000)fail(400,'Invalid episode page');
       const id=cleanId(detail[1]),item=await jf(`Users/${session.id}/Items/${id}`,session);
       const result={item:cleanItem(item),people:(item.People||[]).slice(0,30).map(p=>({id:p.Id,name:p.Name,role:p.Role||p.Type,type:p.Type,image:!!p.PrimaryImageTag})),studios:(item.Studios||[]).map(s=>s.Name),technical:technical(item),seasons:[],episodes:[],similar:[],errors:[]};
-      const work=[(async()=>{try{const q=new URLSearchParams({UserId:session.id,Limit:'12',Fields:'Overview'});result.similar=visibleItems((await jf(`Items/${id}/Similar?${q}`,session)).Items||[],getConfig(),session.id).map(cleanItem)}catch{result.errors.push('Similar titles are unavailable.')}})()];
+      const work=[(async()=>{try{const q=new URLSearchParams({UserId:session.id,Limit:'48',Fields:'Overview,Genres,People,Studios'});const candidates=visibleItems((await jf(`Items/${id}/Similar?${q}`,session)).Items||[],getConfig(),session.id);result.similar=relatedTitles(item,candidates).map(cleanItem)}catch{result.errors.push('Similar titles are unavailable.')}})()];
       if(item.Type==='Series')work.push((async()=>{
         try{
           const q=new URLSearchParams({UserId:session.id,IsMissing:'false'});
