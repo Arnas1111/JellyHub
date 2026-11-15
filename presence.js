@@ -65,6 +65,7 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
     return false;
   };
   handler.reference=(userId,name='Member')=>{const id=crypto.createHmac('sha256',salt).update(normalized(userId)).digest('hex').slice(0,32);members.set(id,{userId,name,expires:now()+RECENT});return id};
+  handler.avatarReference=(userId,name='Member',imageTag)=>{if(!validId(userId))return null;const id=handler.reference(userId,name),version=crypto.createHash('sha256').update(String(profileOf(getConfig(),userId).avatarVersion||imageTag||'default')).digest('hex').slice(0,12);return '/api/presence/avatar/'+id+'?v='+version};
   handler.member=async(id,viewer)=>{await presence(viewer);const member=members.get(id);if(!member||member.expires<now())fail(404,'Member unavailable.');const roster=await directory(viewer),person=roster.users.find(person=>normalized(person.userId)===normalized(member.userId))||(roster.partial?getHubSessions().find(person=>normalized(person.id)===normalized(member.userId)):null);if(!person)fail(404,'Member unavailable.');return {userId:member.userId,admin:administrator(member.userId,viewer,roster),name:member.name||person.name||'Member'}};
   handler.isAdministrator=async(id,viewer)=>administrator(id,viewer,await directory(viewer));
   return handler;

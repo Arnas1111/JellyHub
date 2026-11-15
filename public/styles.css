@@ -257,3 +257,9 @@ legend{padding:0 7px;color:#aab5c9}
 /* Search results are a complete poster grid rather than a horizontal shelf. */
 .grid.search-grid{grid-template-columns:repeat(auto-fill,minmax(155px,1fr));grid-auto-flow:row;gap:18px;min-width:0;align-items:stretch}.search-grid>.tile,.search-grid>.tile-card{min-width:0;width:100%}.search-grid .poster{width:100%}
 @media(max-width:600px){.grid.search-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
+
+/* Stream portraits and search navigation */
+.stream-card .requester-avatar{position:relative;overflow:hidden}.stream-card .requester-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+#browse-home{display:inline-flex;align-items:center;justify-content:center;gap:9px}#browse-home svg{display:block;flex:none;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.channel-action,#add-channel,#new-direct{display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}.channel-action svg,#add-channel svg,#new-direct svg{display:block;flex:none;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

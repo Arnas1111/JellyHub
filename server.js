@@ -170,7 +170,7 @@ const featureAPI=createFeatures({getConfig:()=>config,saveConfig,jf,upstream,jso
 const mediaAPI=createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig:()=>config});
 const playbackAPI=createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,send,logger});
 const personalizationAPI=createPersonalization({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId});
-const coreAPI=createCore({jf,json,readBody,cleanId,getConfig:()=>config,saveConfig,getManagementCollections:async()=>{try{await maintainerrIndex()}catch{/* Last known IDs remain available in appdata. */}return managementIds(config)}});
+const coreAPI=createCore({jf,json,readBody,cleanId,getStreamAvatar:session=>presenceAPI.avatarReference(session.UserId,session.UserName,session.UserPrimaryImageTag),getConfig:()=>config,saveConfig,getManagementCollections:async()=>{try{await maintainerrIndex()}catch{/* Last known IDs remain available in appdata. */}return managementIds(config)}});
 const pluginAPI=createPlugins({jf,json,readBody,cleanId,getConfig:()=>config});
 const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,json});
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
