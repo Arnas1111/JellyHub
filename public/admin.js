@@ -1,19 +1,18 @@
 import {renderRoles} from './roles-admin.js';
 import {renderRegistrationSettings} from './registration-admin.js';
 import {createUIId} from './choices.js';
-const tabs=[['general','General'],['users','Users'],['roles','Roles'],['registration','Registration'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
-const policyLabels={IsAdministrator:'Administrator',IsDisabled:'Disable account',IsHidden:'Hide from login screen',EnableRemoteAccess:'Allow remote access',EnableMediaPlayback:'Allow playback',EnableContentDownloading:'Allow downloads',EnableAudioPlaybackTranscoding:'Allow audio transcoding',EnableVideoPlaybackTranscoding:'Allow video transcoding',EnableAllFolders:'Allow all server sections'};
+const tabs=[['general','General'],['users','Users & roles'],['registration','Registration'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
 
 export async function renderAdministration(ctx){
   const {state,api,escapeHTML:e,applyBranding}=ctx;
-  const revision=state.revision,tab=state.adminTab||'general';
+  const revision=state.revision,tab=state.adminTab==='roles'?'users':state.adminTab||'general';
   const current=()=>revision===state.revision;
   document.querySelector('#content').innerHTML=`<div class="breadcrumb">Administration <span aria-hidden="true">›</span> ${e(tabs.find(t=>t[0]===tab)?.[1]||'General')}</div><h1 class="heading">Administration</h1><nav class="admin-tabs" aria-label="Administration sections">${tabs.map(([key,label])=>`<button data-admin-tab="${key}" aria-current="${key===tab?'page':'false'}">${label}</button>`).join('')}</nav><div id="admin-content" class="admin-content"><p class="loader">Loading…</p></div>`;
   document.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.onclick=()=>{state.adminTab=btn.dataset.adminTab;ctx.navigate('admin')});
   const panel=document.querySelector('#admin-content');
   const feedback=(el,text,status='error')=>{el.dataset.state=status;el.textContent=text};
   try{
-    if(tab==='roles'){await renderRoles(ctx,panel,current);return}
+    if(tab==='users'){await renderRoles(ctx,panel,current);return}
     if(tab==='registration'){await renderRegistrationSettings(ctx,panel,current);return}
     if(tab==='plugins'){
       const data=await api('/api/admin/plugins');if(!current())return;
@@ -27,37 +26,9 @@ export async function renderAdministration(ctx){
       panel.querySelector('#add-navigation').onclick=()=>{if(links.length<20){links.push({id:'link-'+createUIId(),title:'',url:'',role:'admin'});draw()}};
       panel.querySelector('#navigation-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,output=form.querySelector('.feedback');try{await api('/api/admin/navigation',{method:'PUT',body:JSON.stringify({links})});const data=await api('/api/navigation');state.navigation=data.links;feedback(output,'Navigation saved.','success')}catch(error){feedback(output,error.message)}};return;
     }
-    if(tab==='users'){
-
-      const data=await api('/api/admin/users');if(!current())return;
-      panel.innerHTML=`<h2>Jellyfin users</h2><p class="muted">Manage existing accounts and server section access. Changes apply to Jellyfin when you save. Role overrides are managed under Roles and take precedence over individual settings.</p><div class="user-layout"><div class="user-list" aria-label="Users">${data.users.map(u=>`<button class="ghost" data-user="${e(u.id)}">${e(u.name)}<small>${u.policy.IsAdministrator?'Administrator':u.policy.IsDisabled?'Disabled':'User'}</small></button>`).join('')}</div><div id="user-editor"><p class="muted">Select a user.</p></div></div>`;
-      function edit(user){
-        const editor=document.querySelector('#user-editor');
-        editor.innerHTML=`<h3>${e(user.name)}</h3><form id="rename-user" class="bar"><label>Account name<input class="input" name="name" required maxlength="128" value="${e(user.name)}"/></label><button class="ghost">Rename</button><p class="feedback" role="status"></p></form><form id="user-policy"><fieldset class="policy-options"><legend>Permissions</legend>${Object.entries(policyLabels).map(([key,label])=>`<label class="key-clear"><input type="checkbox" name="${key}" ${user.policy[key]?'checked':''}/><span>${label}</span></label>`).join('')}</fieldset><fieldset id="user-libraries"><legend>Allowed server sections when “Allow all server sections” is off</legend>${data.libraries.map(f=>`<label class="key-clear"><input type="checkbox" name="folder" value="${e(f.id)}" ${(user.policy.EnabledFolders||[]).includes(f.id)?'checked':''}/><span>${e(f.name)}</span></label>`).join('')||'<p>No server sections found.</p>'}</fieldset><button class="primary">Save permissions</button><p class="feedback" role="status"></p></form>`;
-        editor.insertAdjacentHTML('beforeend',`<form id="user-features" class="connection"><h3>JellyHub features</h3><p class="muted">Choose which sections this user can access. Jellyfin and Seerr permissions still apply. Administrators always have access.</p><label class="key-clear"><input type="checkbox" name="requests" ${user.features?.requests!==false?'checked':''} ${user.policy.IsAdministrator?'disabled':''}/><span>Requests — section, discovery and requesting media</span></label><label class="key-clear"><input type="checkbox" name="streams" ${user.features?.streams||user.policy.IsAdministrator?'checked':''} ${user.policy.IsAdministrator?'disabled':''}/><span>Active Streams — view streams visible to this Jellyfin account</span></label><button class="primary" ${user.policy.IsAdministrator?'disabled':''}>Save feature access</button><p class="feedback" role="status"></p></form>`);
-        editor.querySelector('#user-features').onsubmit=async event=>{
-          event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),fields=new FormData(form);button.disabled=true;
-          try{const result=await api(`/api/admin/users/${encodeURIComponent(user.id)}/features`,{method:'PUT',body:JSON.stringify({requests:fields.has('requests'),streams:fields.has('streams')})});user.features=result.features;feedback(form.querySelector('[role="status"]'),'Feature access saved.','success')}
-          catch(error){feedback(form.querySelector('[role="status"]'),error.message)}finally{button.disabled=false}
-        };
-        const all=editor.querySelector('[name="EnableAllFolders"]');const libraryBox=document.querySelector('#user-libraries');const sync=()=>libraryBox.disabled=all.checked;all.onchange=sync;sync();
-        editor.querySelector('#rename-user').onsubmit=async event=>{
-          event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;
-          try{const name=new FormData(form).get('name');await api(`/api/admin/users/${encodeURIComponent(user.id)}/name`,{method:'PUT',body:JSON.stringify({name})});user.name=name;const option=document.querySelector(`[data-user="${CSS.escape(user.id)}"]`);option.firstChild.textContent=name;editor.querySelector('h3').textContent=name;feedback(form.querySelector('[role="status"]'),'Name saved.','success')}
-          catch(error){feedback(form.querySelector('[role="status"]'),error.message)}finally{btn.disabled=false}
-        };
-        editor.querySelector('#user-policy').onsubmit=async event=>{
-          event.preventDefault();const form=event.currentTarget,btn=form.querySelector('button');btn.disabled=true;
-          const fields=new FormData(form);const policy=Object.fromEntries(Object.keys(policyLabels).map(k=>[k,fields.has(k)]));policy.EnabledFolders=all.checked?user.policy.EnabledFolders:fields.getAll('folder');
-          try{await api(`/api/admin/users/${encodeURIComponent(user.id)}`,{method:'PUT',body:JSON.stringify({name:user.name,policy})});user.policy=policy;feedback(form.querySelector('[role="status"]'),'Permissions saved.','success')}
-          catch(error){feedback(form.querySelector('[role="status"]'),error.message)}finally{btn.disabled=false}
-        };
-      }
-      document.querySelectorAll('[data-user]').forEach(btn=>btn.onclick=()=>edit(data.users.find(u=>u.id===btn.dataset.user)));return;
-    }
     if(tab==='branding'){
       const saved=await api('/api/admin/branding');if(!current())return;
-      panel.innerHTML=`<h2>Branding</h2><p class="muted">Customize this frontend for everyone, including the sign-in page.</p><form id="branding-form" class="connection"><label>Browser title<input class="input" name="title" maxlength="80" required value="${e(saved.title)}"/></label><label>Sidebar text<input class="input" name="name" maxlength="40" required value="${e(saved.name)}"/></label><label>Home greeting<input class="input" name="welcome" maxlength="160" required value="${e(saved.welcome)}"/></label><label>Accent color<input name="accent" type="color" value="${e(saved.accent)}"/></label><button class="primary">Save branding</button><p class="feedback" role="status"></p></form><form id="favicon-form" class="connection"><h3>Favicon</h3><img class="favicon-preview" src="${e(saved.favicon)}" alt="Current favicon"/><label>Favicon file<input name="favicon" type="file" accept="image/png,image/x-icon,.ico" required/></label><small class="muted">PNG (up to 512 × 512) or ICO, at most 64 KiB.</small><div class="bar"><button class="primary">Upload favicon</button><button class="ghost" type="button" id="reset-favicon">Reset favicon</button></div><p class="feedback" role="status"></p></form>`;
+      panel.innerHTML=`<h2>Branding</h2><p class="muted">Customize this frontend for everyone, including the sign-in page.</p><form id="branding-form" class="connection"><label>Browser title<input class="input" name="title" maxlength="80" required value="${e(saved.title)}"/></label><label>Sidebar text<input class="input" name="name" maxlength="40" required value="${e(saved.name)}"/></label><input type="hidden" name="welcome" value="${e(saved.welcome)}"/><label>Accent color<input name="accent" type="color" value="${e(saved.accent)}"/></label><button class="primary">Save branding</button><p class="feedback" role="status"></p></form><form id="favicon-form" class="connection"><h3>Favicon</h3><img class="favicon-preview" src="${e(saved.favicon)}" alt="Current favicon"/><label>Favicon file<input name="favicon" type="file" accept="image/png,image/x-icon,.ico" required/></label><small class="muted">PNG (up to 512 × 512) or ICO, at most 64 KiB.</small><div class="bar"><button class="primary">Upload favicon</button><button class="ghost" type="button" id="reset-favicon">Reset favicon</button></div><p class="feedback" role="status"></p></form>`;
       panel.insertAdjacentHTML('beforeend',`<form id="logo-form" class="connection"><h3>Sidebar logo</h3><img class="favicon-preview" src="${e(saved.logo||saved.favicon)}" alt="Current sidebar logo"/><p class="muted">The favicon is used beside the sidebar name by default. A 512 × 512 icon is already sharp at this size; upload a separate PNG if you want different artwork.</p><label>Logo file<input name="logo" type="file" accept="image/png" required/></label><small class="muted">PNG, up to 2048 × 2048 pixels and 2 MiB.</small><div class="bar"><button class="primary">Upload logo</button><button class="ghost" type="button" id="reset-logo">Use favicon as logo</button></div><p class="feedback" role="status"></p></form>`);
       async function uploadLogo(method,data){
         const form=document.querySelector('#logo-form');const buttons=[...form.querySelectorAll('button')];buttons.forEach(btn=>btn.disabled=true);

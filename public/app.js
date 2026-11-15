@@ -102,7 +102,7 @@ function bindSearch(){document.querySelector('#universal-search').onsubmit=event
 function recordRoute(route){if(location.hash.slice(1)!==route)history.pushState(null,'','#'+route)}
 async function home(){
   const revision=state.revision;
-  content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1><p class="muted">Server media and requests, in one place.</p>${searchForm('')}</div><div id="featured">${carouselPlaceholder()}</div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="next-up"></div><div id="rows"><p class="loader">Loading server media…</p></div>`);bindSearch();
+  content(`<div class="home-intro"><h1 class="sr-only">Home</h1>${searchForm('')}</div><div id="featured">${carouselPlaceholder()}</div><div id="discovery"><p class="loader">Loading recommendations…</p></div><div id="next-up"></div><div id="rows"><p class="loader">Loading server media…</p></div>`);bindSearch();
   disposePage=mountCarousel({root:document.querySelector('#featured'),api,isCurrent:()=>revision===state.revision,onSelect:showItem,escapeHTML,cacheKey:state.user.id});
   await Promise.all([
     (async()=>{try{const data=await cached('/api/next-up',15000);if(revision!==state.revision)return;document.querySelector('#next-up').innerHTML=section('Next up',data.Items);bindTiles();loadRemovals()}catch{/* Optional row; other home data remains available. */}})(),
@@ -112,8 +112,8 @@ async function home(){
 }
 async function search(query='',page=1){
   recordRoute('search/'+encodeURIComponent(query)+(page>1?'?page='+page:''));
-  state.page='home';const revision=++state.revision;shell();content(`<div class="home-intro"><h1 class="heading">${escapeHTML(state.branding.welcome)}</h1>${searchForm(query)}</div><button class="ghost" id="browse-home">← Back to browsing</button><div id="search-results">${query?'<p class="loader">Searching…</p>':'<p class="muted">Search your Jellyfin library and Seerr’s movie and TV catalog.</p>'}</div>`);bindSearch();document.querySelector('#browse-home').onclick=()=>navigate('home');if(!query.trim())return;
-  try{const result=await cached('/api/search?q='+encodeURIComponent(query)+'&page='+page);if(revision!==state.revision)return;document.querySelector('#search-results').innerHTML=section('On server',result.library)+section('Discover & request',result.catalog.filter(i=>!i.libraryId),catalogTile)+result.errors.map(error=>`<p class="notice">${escapeHTML(error.source)}: ${escapeHTML(error.message)}</p>`).join('')+((result.pages||1)>1?`<nav class="pagination" aria-label="Search pages"><button class="ghost" id="search-previous" ${page===1?'disabled':''}>Previous results</button><span>Page ${page} of ${result.pages}</span><button class="ghost" id="search-next" ${page>=result.pages?'disabled':''}>Next results</button></nav>`:'');for(const [id,delta]of [['#search-previous',-1],['#search-next',1]]){const button=document.querySelector(id);if(button)button.onclick=()=>search(query,page+delta)}bindTiles();loadRemovals()}
+  state.page='home';const revision=++state.revision;shell();content(`<div class="home-intro"><h1 class="sr-only">Search</h1>${searchForm(query)}</div><button class="ghost" id="browse-home">← Back to browsing</button><div id="search-results">${query?'<p class="loader">Searching…</p>':'<p class="muted">Search server media and requestable movies and shows.</p>'}</div>`);bindSearch();document.querySelector('#browse-home').onclick=()=>navigate('home');if(!query.trim())return;
+  try{const result=await cached('/api/search?q='+encodeURIComponent(query)+'&page='+page);if(revision!==state.revision)return;document.querySelector('#search-results').innerHTML=result.errors.map(error=>`<p class="notice">${escapeHTML(error.source)}: ${escapeHTML(error.message)}</p>`).join('')+section('On server',result.library)+(state.user.permissions?.requests===false?'':section('Discover & request',result.catalog.filter(i=>!i.libraryId),catalogTile)+(result.catalogState==='empty'?'<p class="muted catalog-search-status">Seerr returned no matching titles. Try the same search in Seerr to check its catalog search.</p>':''))+((result.pages||1)>1?`<nav class="pagination" aria-label="Search pages"><button class="ghost" id="search-previous" ${page===1?'disabled':''}>Previous results</button><span>Page ${page} of ${result.pages}</span><button class="ghost" id="search-next" ${page>=result.pages?'disabled':''}>Next results</button></nav>`:'');for(const [id,delta]of [['#search-previous',-1],['#search-next',1]]){const button=document.querySelector(id);if(button)button.onclick=()=>search(query,page+delta)}bindTiles();loadRemovals()}
   catch(error){if(revision===state.revision)document.querySelector('#search-results').innerHTML=errorHTML(error)}
 }
 async function library(type,query='',options={}){
@@ -180,6 +180,7 @@ async function startPlayback(itemId,startTicks){
   catch(error){if(revision===state.revision)content(errorHTML(error))}
 }
 function navigate(page){
+  if(page==='admin'&&state.adminTab==='roles')state.adminTab='users';
   if(page==='chat'&&state.page==='chat'&&disposePage.switchRoom)return showChat();
   recordRoute(page==='admin'?'admin/'+state.adminTab:page);
   state.revision++;state.page=page;shell();

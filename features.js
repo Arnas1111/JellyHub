@@ -131,7 +131,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
         else fail(400,'Unsupported user policy field: '+key);
       }
       const controlled=new Set(assignedRoles(getConfig(),id).flatMap(role=>Object.keys(role.policy))),effective=rolePolicy(getConfig(),id,current.Policy);
-      for(const key of controlled)if(JSON.stringify(policy[key])!==JSON.stringify(effective[key]))fail(403,'This permission is managed by a role. Edit it under Administration > Roles.');
+      for(const key of controlled)if(JSON.stringify(policy[key])!==JSON.stringify(effective[key]))fail(403,'This permission is managed by a role. Edit it under Administration > Users & roles.');
       if(normalizedId(id)===normalizedId(session.id)&&(policy.IsDisabled||!policy.IsAdministrator))fail(400,'Use another administrator account to disable or demote your current account.');
       if(policy.IsAdministrator&&policy.IsDisabled)fail(400,'An administrator cannot be disabled.');
       if(current.Policy?.IsAdministrator&&!policy.IsAdministrator){const users=await jf('Users',session);if(users.filter(u=>u.Policy?.IsAdministrator&&!u.Policy?.IsDisabled).length<=1)fail(400,'Keep at least one enabled administrator.')}
@@ -158,9 +158,10 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       const q=new URLSearchParams({Recursive:'true',IncludeItemTypes:'Movie,Series',SearchTerm:query,StartIndex:String((page-1)*60),Limit:'60',EnableTotalRecordCount:'true',Fields:'ProviderIds,ProductionYear,Overview'});
       const results=await Promise.allSettled([jf(`Users/${session.id}/Items?${q}`,session),(async()=>{if(!featurePermissions(getConfig(),session.id,session.admin).requests)return {items:[],pages:1};const identity=await seerrIdentity(session);const found=await seerr('search?'+new URLSearchParams({query,page:String(page)}),identity.headers);return {items:(found.results||[]).filter(i=>['movie','tv'].includes(i.mediaType)).map(i=>catalogItem(i,i.mediaType,identity.permissions)),pages:Math.min(500,Number(found.totalPages)||page)}})()]);
       const library=results[0].status==='fulfilled'?results[0].value.Items||[]:[];
-      let catalog=[];if(results[1].status==='fulfilled'){let matches=library;try{matches=[...library,...await libraryMatches(session,results[1].value.items.map(item=>item.id))]}catch{/* Search results still work if the optional cross-page matching query fails. */}catalog=attachLibrary(results[1].value.items,matches)}
+      let catalog=[],matched=[];if(results[1].status==='fulfilled'){let matches=library;try{matches=[...library,...await libraryMatches(session,results[1].value.items.map(item=>item.id))]}catch{/* Search results still work if the optional cross-page matching query fails. */}catalog=attachLibrary(results[1].value.items,matches);const linked=new Set(catalog.map(item=>item.libraryId).filter(Boolean));matched=matches.filter(item=>linked.has(item.Id))}
+      const localResults=[...new Map([...library,...matched].map(item=>[item.Id,item])).values()];
       const pages=Math.max(1,results[0].status==='fulfilled'?Math.ceil((results[0].value.TotalRecordCount||library.length)/60):1,results[1].status==='fulfilled'?results[1].value.pages:1);
-      json(res,200,{library:library.map(libraryItem),catalog,page,pages:Math.min(500,pages),errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
+      json(res,200,{library:localResults.map(libraryItem),catalog,catalogState:!featurePermissions(getConfig(),session.id,session.admin).requests?'disabled':results[1].status==='rejected'?'unavailable':catalog.length?'results':'empty',page,pages:Math.min(500,pages),errors:results.flatMap((r,i)=>r.status==='rejected'?[{source:i?'Seerr':'Jellyfin',message:r.reason.message}]:[])});return true;
     }
     if(route==='/api/discover'&&method==='GET'){
       if(!featurePermissions(getConfig(),session.id,session.admin).requests)fail(403,'Requests are disabled for this account.');
