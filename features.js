@@ -1,3 +1,4 @@
+import {assignedRoles,rolePolicy,serializePolicyChange} from './roles.js';
 import {createMyList} from './my-list.js';
 import {featurePermissions} from './profiles.js';
 import {visibleItems,libraryItem} from './core.js';
@@ -120,6 +121,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
     }
     const userRoute=route.match(/^\/api\/admin\/users\/([^/]+)$/);
     if(userRoute&&method==='PUT'){
+      return serializePolicyChange(async()=>{
       const id=cleanId(userRoute[1]),input=await readBody(req);
       if(typeof input.name!=='string'||!input.name.trim()||input.name.length>128||!input.policy||Array.isArray(input.policy))fail(400,'Enter a user name and valid policy.');
       const current=await jf('Users/'+id,session),policy={...current.Policy};
@@ -128,6 +130,8 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
         else if(key==='EnabledFolders'&&Array.isArray(value)&&value.length<=200&&value.every(x=>typeof x==='string'))policy.EnabledFolders=value.map(cleanId);
         else fail(400,'Unsupported user policy field: '+key);
       }
+      const controlled=new Set(assignedRoles(getConfig(),id).flatMap(role=>Object.keys(role.policy))),effective=rolePolicy(getConfig(),id,current.Policy);
+      for(const key of controlled)if(JSON.stringify(policy[key])!==JSON.stringify(effective[key]))fail(403,'This permission is managed by a role. Edit it under Administration > Roles.');
       if(normalizedId(id)===normalizedId(session.id)&&(policy.IsDisabled||!policy.IsAdministrator))fail(400,'Use another administrator account to disable or demote your current account.');
       if(policy.IsAdministrator&&policy.IsDisabled)fail(400,'An administrator cannot be disabled.');
       if(current.Policy?.IsAdministrator&&!policy.IsAdministrator){const users=await jf('Users',session);if(users.filter(u=>u.Policy?.IsAdministrator&&!u.Policy?.IsDisabled).length<=1)fail(400,'Keep at least one enabled administrator.')}
@@ -138,6 +142,7 @@ export function createFeatures({getConfig,saveConfig,jf,upstream,json,readBody,c
       if(input.name.trim()!==current.Name)fail(400,'Name changes use the separate Rename action. Save permissions first.');
       await jf(`Users/${id}/Policy`,session,{method:'POST',body:policy});
       json(res,200,{ok:true});return true;
+      });
     }
     const rename=route.match(/^\/api\/admin\/users\/([^/]+)\/name$/);
     if(rename&&method==='PUT'){

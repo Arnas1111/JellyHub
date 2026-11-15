@@ -1,3 +1,4 @@
+import {roleFeature} from './roles.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -7,7 +8,7 @@ export function profileOf(config,id){try{if(config.userState!==savedState){parse
 export function profileName(config,id,fallback){return profileOf(config,id).displayName||fallback}
 export function featurePermissions(config,id,admin=false){
   profileOf(config,id);const key=String(id||'').replaceAll('-','').toLowerCase(),state=parsedState[id]||Object.entries(parsedState).find(([candidate])=>candidate.replaceAll('-','').toLowerCase()===key)?.[1]||{},permissions=state.featurePermissions||{};
-  return {requests:admin||permissions.requests!==false,streams:admin||permissions.streams===true};
+  return {requests:admin||roleFeature(config,id,'requests',permissions.requests!==false),streams:admin||roleFeature(config,id,'streams',permissions.streams===true)};
 }
 export function profileImage(bytes,{allowGif=false,maxBytes=2097152}={}){
   if(bytes.length>maxBytes)fail(413,'Profile picture is too large.');
@@ -28,8 +29,8 @@ export function createProfiles({jf,jellyfin,authHeader,json,send,readBody,getCon
   async function saveProfile(user,patch){await saveConfig(config=>{let all;try{all=JSON.parse(config.userState||'{}')}catch{all={}}all[user.id]={...all[user.id],profile:{...all[user.id]?.profile,...patch}};return {userState:JSON.stringify(all)}})}
   async function transfer(user,method,data,type){const response=await fetchImpl(new URL(`Users/${user.id}/Images/Primary`,jellyfin()+'/'),{method,headers:{Authorization:authHeader(user,user.deviceId),...(type?{'Content-Type':type}:{})},...(data?{body:data.toString('base64')}:{}) ,signal:AbortSignal.timeout(15000),redirect:'error'});if(!response.ok){await response.body?.cancel();fail(response.status,`Jellyfin could not ${method==='POST'?'save':'remove'} the profile picture (HTTP ${response.status}).`)}await response.body?.cancel()}
   return async(req,res,url,user)=>{
-    if(url.pathname==='/api/profile'&&req.method==='GET'){const me=await jf('Users/Me',user),profile=profileOf(getConfig(),user.id);json(res,200,{id:user.id,username:me.Name,displayName:profile.displayName||me.Name,avatar:'/api/profile/avatar?v='+encodeURIComponent(profile.avatarVersion||me.PrimaryImageTag||'default'),canEdit:me.Policy?.EnableUserPreferenceAccess!==false});return true}
-    if(url.pathname==='/api/profile'&&req.method==='PUT'){await canEdit(user);const input=await readBody(req);if(Object.keys(input).some(key=>key!=='displayName')||typeof input.displayName!=='string'||!input.displayName.trim()||input.displayName.trim().length>60||/[\u0000-\u001f\u007f]/.test(input.displayName))fail(400,'Choose a display name of 1–60 characters.');await saveProfile(user,{displayName:input.displayName.trim()});json(res,200,{ok:true,displayName:input.displayName.trim()});return true}
+    if(url.pathname==='/api/profile'&&req.method==='GET'){const me=await jf('Users/Me',user),profile=profileOf(getConfig(),user.id);json(res,200,{id:user.id,username:me.Name,displayName:profile.displayName||me.Name,avatar:'/api/profile/avatar?v='+encodeURIComponent(profile.avatarVersion||me.PrimaryImageTag||'default'),about:profile.about||'',shareHistory:profile.shareHistory===true,canEdit:me.Policy?.EnableUserPreferenceAccess!==false});return true}
+    if(url.pathname==='/api/profile'&&req.method==='PUT'){await canEdit(user);const input=await readBody(req);if(Object.keys(input).some(key=>!['displayName','about','shareHistory'].includes(key))||('displayName' in input&&(typeof input.displayName!=='string'||!input.displayName.trim()||input.displayName.trim().length>60||/[\u0000-\u001f\u007f]/.test(input.displayName)))||('about' in input&&(typeof input.about!=='string'||input.about.length>300))||('shareHistory' in input&&typeof input.shareHistory!=='boolean'))fail(400,'Enter a valid display name and profile settings.');const patch={...input};if(patch.displayName)patch.displayName=patch.displayName.trim();await saveProfile(user,patch);json(res,200,{ok:true,...patch});return true}
     if(url.pathname==='/api/profile/avatar'&&req.method==='GET'){
       const response=await fetchImpl(new URL(`Users/${user.id}/Images/Primary`,jellyfin()+'/'),{headers:{Authorization:authHeader(user,user.deviceId)},signal:AbortSignal.timeout(8000),redirect:'error'});
       if(response.status===404){const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="64" fill="#293349"/><circle cx="64" cy="46" r="22" fill="#a9b7d0"/><path d="M21 115a43 43 0 0 1 86 0" fill="#a9b7d0"/></svg>';await response.body?.cancel();send(res,200,svg,{'Content-Type':'image/svg+xml','Cache-Control':'private, no-cache','Vary':'Cookie'});return true}

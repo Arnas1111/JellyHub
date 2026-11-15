@@ -1,6 +1,7 @@
+import {renderRoles} from './roles-admin.js';
 import {renderRegistrationSettings} from './registration-admin.js';
 import {createUIId} from './choices.js';
-const tabs=[['general','General'],['users','Users'],['registration','Registration'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
+const tabs=[['general','General'],['users','Users'],['roles','Roles'],['registration','Registration'],['branding','Branding'],['navigation','Navigation'],['plugins','Plugins'],['jellyfin','Jellyfin'],['seerr','Seerr'],['sonarr','Sonarr'],['radarr','Radarr'],['jellystat','Jellystat'],['maintainerr','Maintainerr']];
 const policyLabels={IsAdministrator:'Administrator',IsDisabled:'Disable account',IsHidden:'Hide from login screen',EnableRemoteAccess:'Allow remote access',EnableMediaPlayback:'Allow playback',EnableContentDownloading:'Allow downloads',EnableAudioPlaybackTranscoding:'Allow audio transcoding',EnableVideoPlaybackTranscoding:'Allow video transcoding',EnableAllFolders:'Allow all server sections'};
 
 export async function renderAdministration(ctx){
@@ -12,6 +13,7 @@ export async function renderAdministration(ctx){
   const panel=document.querySelector('#admin-content');
   const feedback=(el,text,status='error')=>{el.dataset.state=status;el.textContent=text};
   try{
+    if(tab==='roles'){await renderRoles(ctx,panel,current);return}
     if(tab==='registration'){await renderRegistrationSettings(ctx,panel,current);return}
     if(tab==='plugins'){
       const data=await api('/api/admin/plugins');if(!current())return;
@@ -28,7 +30,7 @@ export async function renderAdministration(ctx){
     if(tab==='users'){
 
       const data=await api('/api/admin/users');if(!current())return;
-      panel.innerHTML=`<h2>Jellyfin users</h2><p class="muted">Manage existing accounts and server section access. Changes apply to Jellyfin when you save.</p><div class="user-layout"><div class="user-list" aria-label="Users">${data.users.map(u=>`<button class="ghost" data-user="${e(u.id)}">${e(u.name)}<small>${u.policy.IsAdministrator?'Administrator':u.policy.IsDisabled?'Disabled':'User'}</small></button>`).join('')}</div><div id="user-editor"><p class="muted">Select a user.</p></div></div>`;
+      panel.innerHTML=`<h2>Jellyfin users</h2><p class="muted">Manage existing accounts and server section access. Changes apply to Jellyfin when you save. Role overrides are managed under Roles and take precedence over individual settings.</p><div class="user-layout"><div class="user-list" aria-label="Users">${data.users.map(u=>`<button class="ghost" data-user="${e(u.id)}">${e(u.name)}<small>${u.policy.IsAdministrator?'Administrator':u.policy.IsDisabled?'Disabled':'User'}</small></button>`).join('')}</div><div id="user-editor"><p class="muted">Select a user.</p></div></div>`;
       function edit(user){
         const editor=document.querySelector('#user-editor');
         editor.innerHTML=`<h3>${e(user.name)}</h3><form id="rename-user" class="bar"><label>Account name<input class="input" name="name" required maxlength="128" value="${e(user.name)}"/></label><button class="ghost">Rename</button><p class="feedback" role="status"></p></form><form id="user-policy"><fieldset class="policy-options"><legend>Permissions</legend>${Object.entries(policyLabels).map(([key,label])=>`<label class="key-clear"><input type="checkbox" name="${key}" ${user.policy[key]?'checked':''}/><span>${label}</span></label>`).join('')}</fieldset><fieldset id="user-libraries"><legend>Allowed server sections when “Allow all server sections” is off</legend>${data.libraries.map(f=>`<label class="key-clear"><input type="checkbox" name="folder" value="${e(f.id)}" ${(user.policy.EnabledFolders||[]).includes(f.id)?'checked':''}/><span>${e(f.name)}</span></label>`).join('')||'<p>No server sections found.</p>'}</fieldset><button class="primary">Save permissions</button><p class="feedback" role="status"></p></form>`;

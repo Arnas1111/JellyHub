@@ -1,3 +1,4 @@
+import {createRoles} from './roles.js';
 import {createChat} from './chat.js';
 import {createPresence} from './presence.js';
 import {createRegistration} from './registration.js';
@@ -26,7 +27,7 @@ const configDir=process.env.CONFIG_DIR || '/config';
 const configFile=path.join(configDir,'settings.json');
 const defaults={
   ...brandingDefaults,
-  registrationState:'{}',registrationServiceKey:'',userState:'{}',navigation:'[]',managementCollections:'[]',hiddenManagementCollections:'[]',
+  roles:'[]',registrationState:'{}',registrationServiceKey:'',userState:'{}',navigation:'[]',managementCollections:'[]',hiddenManagementCollections:'[]',
   jellyfinUrl:process.env.JELLYFIN_URL||'http://jellyfin:8096',
   seerrUrl:process.env.SEERR_URL||'http://Seerr:5055',
   sonarrUrl:process.env.SONARR_URL||'http://sonarr:8989',
@@ -173,7 +174,8 @@ const extensionAPI=createExtensions({getConfig:()=>config,saveConfig,readBody,js
 const profileAPI=createProfiles({jf,jellyfin,authHeader,json,send,readBody,getConfig:()=>config,saveConfig,configDir});
 const registrationAPI=createRegistration({getConfig:()=>config,saveConfig,jf,jellyfin,upstream,authHeader,readBody,json,send,cleanId,logger});
 const presenceAPI=createPresence({getConfig:()=>config,getHubSessions:()=>[...sessions.values()],jf,jellyfin,upstream,authHeader,json,send});
-const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger});
+const chatAPI=createChat({configDir,getConfig:()=>config,readBody,json,logger,send,jf,jellyfin,upstream,authHeader,getMember:presenceAPI.member,reference:presenceAPI.reference});
+const roleAPI=createRoles({getConfig:()=>config,saveConfig,jf,json,readBody,cleanId,logger});
 const api = async(req,res,url)=>{
   const method=req.method;
   if(method!=='GET'){
@@ -212,6 +214,7 @@ const api = async(req,res,url)=>{
   const permissions=featurePermissions(config,s.id,s.admin);
   if((url.pathname==='/api/requests'||url.pathname.startsWith('/api/catalog/'))&&!permissions.requests)throw Object.assign(Error('Requests are disabled for this account.'),{status:403});
   if(url.pathname==='/api/active-streams'&&!permissions.streams)throw Object.assign(Error('Active Streams are disabled for this account.'),{status:403});
+  if(await roleAPI(req,res,url,s))return;
   if(await chatAPI(req,res,url,s))return;
   if(await presenceAPI(req,res,url,s))return;
   if(await registrationAPI(req,res,url,s))return;

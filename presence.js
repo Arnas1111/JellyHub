@@ -43,7 +43,7 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
       const index=cursor++,person=selected[index],id=crypto.createHmac('sha256',salt).update(normalized(person.userId)).digest('hex').slice(0,32);let activity=null;
       if(person.playing&&canSeeTitles){try{const item=viewer.admin?person.playing.item:await jf(`Users/${viewer.id}/Items/${person.playing.item.Id}`,viewer);activity={title:String(item.Name||'Video').slice(0,180),series:String(item.SeriesName||'').slice(0,120),itemId:person.playing.item.Id}}catch{/* Playback state is visible without exposing forbidden media titles. */}}
       const profile=profileOf(getConfig(),person.userId),version=crypto.createHash('sha256').update(String(profile.avatarVersion||person.imageTag||'default')).digest('hex').slice(0,12);
-      members.set(id,{userId:person.userId,expires:now()+RECENT});output[index]={id,name:profileName(getConfig(),person.userId,person.name),state:person.state,activity,avatar:'/api/presence/avatar/'+id+'?v='+version};
+      members.set(id,{userId:person.userId,name:person.name,expires:now()+RECENT});output[index]={id,name:profileName(getConfig(),person.userId,person.name),state:person.state,activity,avatar:'/api/presence/avatar/'+id+'?v='+version};
     }}));for(const [key,value]of members)if(value.expires<now())members.delete(key);
     return {users:output.filter(user=>!['offline','unknown'].includes(user.state)),offline:output.filter(user=>user.state==='offline'),unknown:output.filter(user=>user.state==='unknown'),offlineCount:inactive.filter(user=>user.state==='offline').length,count:people.length,partial:native.partial||roster.partial,updated:new Date(now()).toISOString()};
   }
@@ -57,10 +57,13 @@ export function createPresence({getConfig,getHubSessions,jf,jellyfin,upstream,au
       return {type,bytes:Buffer.concat(chunks)};
     })().catch(()=>null);if(avatars.size>=100)avatars.delete(avatars.keys().next().value);avatars.set(cacheKey,{expires:now()+30000,work});return work;
   }
-  return async(req,res,url,viewer)=>{
+  const handler=async(req,res,url,viewer)=>{
     if(req.method!=='GET')return false;
     if(url.pathname==='/api/presence'){json(res,200,await presence(viewer));return true}
     const match=url.pathname.match(/^\/api\/presence\/avatar\/([a-f0-9]{32})$/);if(match){const member=members.get(match[1]);if(!member||member.expires<now())fail(404,'Profile picture unavailable');const image=await avatar(member.userId,viewer);if(!image){send(res,204,'',{'Cache-Control':'private, max-age=30','Vary':'Cookie'});return true}send(res,200,image.bytes,{'Content-Type':image.type,'Cache-Control':'private, max-age=30','Vary':'Cookie'});return true}
     return false;
   };
+  handler.reference=(userId,name='Member')=>{const id=crypto.createHmac('sha256',salt).update(normalized(userId)).digest('hex').slice(0,32);members.set(id,{userId,name,expires:now()+RECENT});return id};
+  handler.member=async(id,viewer)=>{await presence(viewer);const member=members.get(id);if(!member||member.expires<now())fail(404,'Member unavailable.');const roster=await directory(viewer),person=roster.users.find(person=>normalized(person.userId)===normalized(member.userId))||(roster.partial?getHubSessions().find(person=>normalized(person.id)===normalized(member.userId)):null);if(!person)fail(404,'Member unavailable.');return {userId:member.userId,name:member.name||person.name||'Member'}};
+  return handler;
 }

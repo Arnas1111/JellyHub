@@ -21,8 +21,8 @@ async function refreshStreamCount(){
   try{
     const [count,presence]=await Promise.allSettled([api('/api/active-streams/count',{signal:controller.signal}),api('/api/presence',{signal:controller.signal})]);if(epoch!==streamCountEpoch)return;
     state.streamCount=count.status==='fulfilled'&&Number.isSafeInteger(count.value.count)&&count.value.count>=0?count.value.count:null;
-    state.presence=presence.status==='fulfilled'?presence.value:null;paintPresence(document.querySelector('#online-users'),state.presence,escapeHTML,showItem);
-  }catch{if(epoch===streamCountEpoch){state.streamCount=null;state.presence=null;paintPresence(document.querySelector('#online-users'),null,escapeHTML,showItem)}}
+    state.presence=presence.status==='fulfilled'?presence.value:null;paintPresence(document.querySelector('#online-users'),state.presence,escapeHTML,showItem,showMember);
+  }catch{if(epoch===streamCountEpoch){state.streamCount=null;state.presence=null;paintPresence(document.querySelector('#online-users'),null,escapeHTML,showItem,showMember)}}
   finally{
     if(epoch===streamCountEpoch){streamCountController=null;document.querySelectorAll('.stream-count').forEach(badge=>{badge.textContent=state.streamCount??'';badge.hidden=!(state.streamCount>0)});const button=document.querySelector('[data-nav="streams"]');if(button)button.setAttribute('aria-description',state.streamCount===null?'Active stream count unavailable':state.streamCount+' active '+(state.streamCount===1?'stream':'streams'));if(state.user)streamCountTimer=setTimeout(refreshStreamCount,15000)}
   }
@@ -53,10 +53,10 @@ function applyBranding(value){
 }
 function shell(){
   releasePage();
-  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...(state.user.permissions?.requests!==false?[['requests','Requests']]:[]),['streams','Active Streams'],['chat','Chat'],...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
-  root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" ${id==='streams'?`aria-label="Active Streams" ${!state.user.permissions?.streams&&!state.user.admin?'disabled title="Permission required to view stream details"':'title="View active streams"'}`:''} class="${(id===state.page||id==='movies'&&state.page==='collections')?'active':''}">${label}${id==='streams'?`<span class="stream-count" aria-hidden="true" ${state.streamCount>0?'':'hidden'}>${state.streamCount??''}</span>`:''}</button>`).join('')}${(state.navigation||[]).map(link=>`<a class="custom-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.title)}</a>`).join('')}</nav><section class="sidebar-users" id="online-users" aria-label="Users"></section></aside><main class="main"><header class="top"><div class="topright"><button class="profile-button" id="account" aria-label="Open profile for ${escapeHTML(state.user.name)}">${state.user.avatar?`<img class="profile-avatar" src="${escapeHTML(state.user.avatar)}" alt=""/>`:`<span class="profile-avatar profile-fallback" aria-hidden="true">${escapeHTML(state.user.name.slice(0,1))}</span>`}<span data-profile-name>${escapeHTML(state.user.name)}</span></button><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
+  const nav=[['home','Home'],['movies','Movies'],['shows','TV Shows'],['favorites','My list'],...(state.user.permissions?.requests!==false?[['requests','Requests']]:[]),['streams','Active Streams'],...pagesFor(state.user).map(page=>[page.id,page.title]),...(state.user.admin?[['admin','Administration']]:[])];
+  root.innerHTML=`<div class="layout"><aside class="side">${brandMarkup()}<nav class="nav" aria-label="Main navigation">${nav.map(([id,label])=>`<button data-nav="${id}" ${id==='streams'?`aria-label="Active Streams" ${!state.user.permissions?.streams&&!state.user.admin?'disabled title="Permission required to view stream details"':'title="View active streams"'}`:''} class="${(id===state.page||id==='movies'&&state.page==='collections')?'active':''}">${label}${id==='streams'?`<span class="stream-count" aria-hidden="true" ${state.streamCount>0?'':'hidden'}>${state.streamCount??''}</span>`:''}</button>`).join('')}${(state.navigation||[]).map(link=>`<a class="custom-link" href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.title)}</a>`).join('')}</nav><div class="social-nav"><h2 class="presence-heading">Community</h2><button class="social-chat-link ${state.page==='chat'?'active':''}" data-nav="chat">Chat</button></div><section class="sidebar-users" id="online-users" aria-label="Users"></section></aside><main class="main"><header class="top"><div class="topright"><button class="profile-button" id="account" aria-label="Open profile for ${escapeHTML(state.user.name)}">${state.user.avatar?`<img class="profile-avatar" src="${escapeHTML(state.user.avatar)}" alt=""/>`:`<span class="profile-avatar profile-fallback" aria-hidden="true">${escapeHTML(state.user.name.slice(0,1))}</span>`}<span data-profile-name>${escapeHTML(state.user.name)}</span></button><button class="linkbutton" id="logout">Sign out ↗</button></div></header><div id="content"></div></main></div>`;
   document.querySelectorAll('[data-nav]').forEach(btn=>btn.onclick=()=>navigate(btn.dataset.nav));
-  paintPresence(document.querySelector('#online-users'),state.presence,escapeHTML,showItem);
+  paintPresence(document.querySelector('#online-users'),state.presence,escapeHTML,showItem,showMember);
   if(!streamCountTimer&&!streamCountController)refreshStreamCount();
   document.querySelector('#account').onclick=()=>navigate('account');document.querySelector('#account').onpointerenter=()=>Promise.all(['/api/profile','/api/account','/api/preferences','/api/bookmarks','/api/hidden-items','/api/profile/presets'].map(path=>cached(path,30000).catch(()=>{})));
   document.querySelector('#logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{state.revision++;history.replaceState(null,'','#home');state.page='home';state.adminTab='general';login()}};
@@ -64,7 +64,7 @@ function shell(){
 function login(message=''){
   stopStreamCount();
   releasePage();
-  clearFeaturedSnapshots();state.chatDraft='';state.chatAttempt=null;state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
+  clearFeaturedSnapshots();state.chatDrafts={};state.chatAttempts={};state.user=null;invalidate();state.removals={};state.navigation=[];state.items?.clear();
   disposePage=mountLogin({root,api,brandMarkup,escapeHTML,message,onSignIn:async values=>{await api('/api/login',{method:'POST',body:JSON.stringify(values)});state.user=await api('/api/me');await loadUserContext();restoreRoute()}});
 }
 const content=html=>{releasePage();document.querySelector('#content').innerHTML=html};
@@ -166,9 +166,10 @@ async function showRequests(options={}){
 async function showStreams(){
   const revision=++state.revision;state.page='streams';recordRoute('streams');shell();return renderStreams({api,content,escapeHTML,isCurrent:()=>revision===state.revision,setDispose:fn=>disposePage=fn});
 }
-async function showChat(){
-  const revision=++state.revision,epoch=streamCountEpoch;state.page='chat';recordRoute('chat');shell();content('<p class="loader">Loading chat…</p>');
-  try{const {mountChat}=await import('./chat.js');if(revision!==state.revision)return;disposePage=mountChat({root:document.querySelector('#content'),api,escapeHTML,getDraft:()=>state.chatDraft||'',onDraft:value=>{if(epoch===streamCountEpoch)state.chatDraft=value},getAttempt:()=>state.chatAttempt,onAttempt:value=>{if(epoch===streamCountEpoch)state.chatAttempt=value}})}catch(error){if(revision===state.revision)content(errorHTML(error))}
+async function showMember(id){const {openMember}=await import('./member-profile.js');return openMember({id,api,escapeHTML,onMessage:showChat,onItem:showItem})}
+async function showChat(roomId='general'){
+  const revision=++state.revision,epoch=streamCountEpoch;state.page='chat';recordRoute('chat'+(roomId==='general'?'':'?room='+encodeURIComponent(roomId)));shell();content('<p class="loader">Loading chat…</p>');
+  try{const {mountChat}=await import('./chat.js');if(revision!==state.revision)return;disposePage=mountChat({root:document.querySelector('#content'),api,escapeHTML,roomId,onRoom:showChat,onMember:showMember,getDraft:()=>state.chatDrafts?.[roomId]||'',onDraft:value=>{if(epoch===streamCountEpoch)(state.chatDrafts||={})[roomId]=value},getAttempt:()=>state.chatAttempts?.[roomId],onAttempt:value=>{if(epoch===streamCountEpoch)(state.chatAttempts||={})[roomId]=value}})}catch(error){if(revision===state.revision)content(errorHTML(error))}
 }
 async function startPlayback(itemId,startTicks){
   recordRoute('play/'+encodeURIComponent(itemId)+(startTicks!==undefined?'?startTicks='+startTicks:''));
@@ -195,6 +196,7 @@ function restoreRoute(){
     if(parts[0]==='search')return search(parts[1]||'',Number(params.get('page')||1));
     if(parts[0]==='library'&&['Movie','Series','BoxSet','Movie,Series'].includes(parts[1])){state.revision++;state.page=parts[1]==='Movie'?'movies':parts[1]==='Series'?'shows':parts[1]==='BoxSet'||params.has('parent')?'collections':'favorites';shell();const options=Object.fromEntries(params);delete options.q;if(options.start)options.start=Number(options.start);return library(parts[1],params.get('q')||'',options)}
     if(parts[0]==='favorites')return params.get('source')==='requests'?showRequests({scope:'mine',filter:params.get('requestFilter')||'all'}):showMyList(Object.fromEntries(params));
+    if(parts[0]==='chat')return showChat(params.get('room')||'general');
     if(parts[0]==='requests')return showRequests(Object.fromEntries(params));
     if(parts[0]==='admin'&&state.user.admin){state.adminTab=parts[1]||'general';return navigate('admin')}
     if(['home','movies','shows','collections','favorites','requests','streams','chat','account'].includes(parts[0])||getPage(parts[0],state.user))return navigate(parts[0]);
