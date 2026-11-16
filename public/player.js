@@ -22,7 +22,7 @@ const ticks=seconds=>Math.max(0,Math.round((seconds||0)*10000000));
 
 export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTicks,onReady=()=>{}}){
   let endedReport=false;
-  let scrubbing=false,initialPositionApplied=false;
+  let scrubbing=false,initialPositionApplied=false,keyboardControls=false;
   let info,hls,prefs={...defaults},disposed=false,started=false,restarting=false,reportQueue=Promise.resolve(),hideTimer,reportTimer,nextTimer,startInfoTimer,holdTimer,priorRate,suppressClick=false,wasPlaying=false,autoSkipped=new Set(),nextCancelled=false;
   let options={itemId,...(startTicks!==undefined?{startTicks}:{})};
   root.innerHTML=`<section class="player-screen" role="region" aria-label="Video player" tabindex="0"><video class="main-video" playsinline preload="metadata"></video><div class="player-vignette"></div><header class="player-top">${button('back','Return to details','back')}<div><span class="player-series"></span><h1 class="player-title">Preparing playback…</h1></div><span class="player-method"></span></header><div class="player-loading" role="status">Negotiating playback with Jellyfin…</div><div class="player-notice" role="status"></div><div class="player-start-info" hidden></div><div class="player-skip" hidden><button class="ghost" data-action="skip-segment"></button></div><div class="player-next" hidden><span>Up next</span><h2></h2><p></p><button class="primary" data-action="next">Play next episode</button><button class="ghost" data-action="cancel-next">Cancel autoplay</button></div><aside class="player-panel" hidden></aside><footer class="player-controls"><div class="player-timeline"><div class="player-markers"></div><label class="sr-only" for="playback-seek">Playback position</label><input id="playback-seek" type="range" min="0" max="1" value="0" step=".1"/></div><div class="player-toolbar"><div class="player-left">${button('toggle','Play or pause','play')}${button('rewind','Back 10 seconds','rewind')}${button('forward','Forward 10 seconds','forward')}${button('mute','Mute or unmute','volume')}<label class="sr-only" for="playback-volume">Volume</label><input id="playback-volume" type="range" min="0" max="100" value="80"/><span class="player-time">00:00 / 00:00</span></div><div class="player-right">${button('chapters','Chapters','chapters')}${button('episodes','Episodes','next')}${button('settings','Audio, subtitles and quality','settings')}${button('pip','Picture in picture','pip')}${button('fullscreen','Fullscreen','expand')}</div></div></footer></section>`;
@@ -31,7 +31,10 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   const runtime=()=>info?.runtimeSeconds||Number.isFinite(video.duration)&&video.duration||0;
   const nextEpisode=()=>{if(!info)return null;if(info.nextEpisode)return info.nextEpisode;const index=info.episodes.findIndex(item=>item.id===info.item.id);return index>=0?info.episodes[index+1]||null:null};
   const notify=text=>{notice.textContent=text;clearTimeout(notice.timer);notice.timer=setTimeout(()=>notice.textContent='',5000)};
-  const showControls=()=>{screen.classList.remove('controls-hidden');clearTimeout(hideTimer);if(!video.paused&&panel.hidden)hideTimer=setTimeout(()=>{if(!screen.contains(document.activeElement)||document.activeElement===video)screen.classList.add('controls-hidden')},3500)};
+  const showControls=()=>{screen.classList.remove('controls-hidden');clearTimeout(hideTimer);if(!video.paused&&panel.hidden&&!scrubbing)hideTimer=setTimeout(()=>{const focused=document.activeElement,usingKeyboard=keyboardControls&&root.contains(focused)&&focused!==screen&&focused!==video;if(!disposed&&!video.paused&&panel.hidden&&!scrubbing&&!usingKeyboard)screen.classList.add('controls-hidden')},3500)};
+  const pointerActivity=()=>{keyboardControls=false;showControls()};
+  const focusLeave=()=>{if(keyboardControls)showControls()};
+  root.addEventListener('pointermove',pointerActivity);root.addEventListener('pointerdown',pointerActivity);root.addEventListener('focusin',showControls);root.addEventListener('focusout',focusLeave);
   function queueReport(event,keepalive=false){
     if(!info||endedReport)return Promise.resolve();const id=info.id;const body={event,positionTicks:ticks(position()),paused:video.paused,muted:video.muted,volume:Math.round(video.volume*100),rate:video.playbackRate};
     reportQueue=reportQueue.catch(()=>{}).then(()=>api(`/api/playback/${id}/report`,{method:'POST',body:JSON.stringify(body),keepalive}));
@@ -127,7 +130,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   const commitSeek=()=>{if(!scrubbing)return;const target=Number(seek.value);scrubbing=false;seekTo(target)};
   seek.onchange=commitSeek;seek.onblur=commitSeek;
   seek.onpointerup=()=>{queueMicrotask(commitSeek)};
-  seek.onpointercancel=()=>{scrubbing=false;seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime())};
+  seek.onpointercancel=()=>{scrubbing=false;showControls();seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime())};
   volume.oninput=()=>{video.volume=Number(volume.value)/100;video.muted=false;prefs.volume=Number(volume.value);showControls()};volume.onchange=()=>savePreferences({volume:Number(volume.value)});
   root.addEventListener('click',async event=>{
     const action=event.target.closest('[data-action]')?.dataset.action;if(!action)return;
@@ -141,10 +144,11 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
     else if(action==='next'){const next=nextEpisode();if(next)onPlay(next.id)}
     else if(action==='cancel-next'){nextCancelled=true;clearInterval(nextTimer);nextTimer=null;root.querySelector('.player-next').hidden=true}
   });
-  video.onclick=()=>{if(suppressClick){suppressClick=false;return}toggle()};screen.onpointermove=showControls;screen.onfocusin=showControls;
+  video.onclick=()=>{if(suppressClick){suppressClick=false;return}toggle()};
   video.onpointerdown=event=>{if(event.button!==0)return;holdTimer=setTimeout(()=>{suppressClick=true;priorRate=video.playbackRate;video.playbackRate=2;notify('2× speed')},500)};
   const releaseHold=()=>{clearTimeout(holdTimer);if(priorRate){video.playbackRate=priorRate;priorRate=null}};video.onpointerup=releaseHold;video.onpointercancel=releaseHold;video.onpointerleave=releaseHold;
   const keyboard=event=>{
+    if(event.key==='Tab'||root.contains(document.activeElement)){keyboardControls=true;showControls()}
     if(event.key==='Escape'&&document.fullscreenElement===screen){event.preventDefault();document.exitFullscreen().catch(()=>{});return}
     if(event.key==='Tab'){
       if(document.fullscreenElement!==screen)return;
@@ -164,7 +168,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   const pagehide=()=>{queueReport('stop',true).catch(()=>{})};
   document.addEventListener('keydown',keyboard);document.addEventListener('visibilitychange',visibility);window.addEventListener('pagehide',pagehide);
   api('/api/preferences').catch(()=>defaults).then(preferences=>{if(disposed)return;prefs={...defaults,...preferences};begin()});
-  const dispose=()=>{if(disposed)return Promise.resolve();disposed=true;const stopped=stopCurrent().catch(()=>{});clearTimeout(hideTimer);clearTimeout(startInfoTimer);clearTimeout(holdTimer);clearTimeout(notice.timer);clearInterval(nextTimer);video.removeEventListener('volumechange',updateVolumeIcon);document.removeEventListener('fullscreenchange',updateFullscreenIcon);document.removeEventListener('keydown',keyboard);document.removeEventListener('visibilitychange',visibility);window.removeEventListener('pagehide',pagehide);if(document.fullscreenElement===screen)document.exitFullscreen().catch(()=>{});if(document.pictureInPictureElement===video)document.exitPictureInPicture?.().catch(()=>{});return stopped};
+  const dispose=()=>{if(disposed)return Promise.resolve();disposed=true;root.removeEventListener('pointermove',pointerActivity);root.removeEventListener('pointerdown',pointerActivity);root.removeEventListener('focusin',showControls);root.removeEventListener('focusout',focusLeave);const stopped=stopCurrent().catch(()=>{});clearTimeout(hideTimer);clearTimeout(startInfoTimer);clearTimeout(holdTimer);clearTimeout(notice.timer);clearInterval(nextTimer);video.removeEventListener('volumechange',updateVolumeIcon);document.removeEventListener('fullscreenchange',updateFullscreenIcon);document.removeEventListener('keydown',keyboard);document.removeEventListener('visibilitychange',visibility);window.removeEventListener('pagehide',pagehide);if(document.fullscreenElement===screen)document.exitFullscreen().catch(()=>{});if(document.pictureInPictureElement===video)document.exitPictureInPicture?.().catch(()=>{});return stopped};
   dispose.setDocked=value=>{screen.classList.toggle('is-docked',value);const back=root.querySelector('[data-action="back"]');back.setAttribute('aria-label',value?'Stop playback':'Return to details');back.title=value?'Stop playback':'Return to details';back.innerHTML=icon(value?'close':'back');closePanel();showControls()};
   return dispose;
 }
