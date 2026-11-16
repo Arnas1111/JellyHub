@@ -38,6 +38,17 @@ test('manual previews negotiate HLS without changing watch state and clean up th
   assert.equal(fixture.reports.length,0);assert.ok(fixture.calls.some(call=>call.path==='/Videos/ActiveEncodings'&&call.method==='DELETE'));assert.equal((await request(info.url)).status,403);
 });
 
+test('stream failures log safe resource diagnostics with the resume position',async t=>{
+  const fixture=await startPlaybackFixture({segmentFailure:503});t.after(()=>fixture.close());
+  const login=await fetch(fixture.base+'/api/login',{method:'POST',body:JSON.stringify({username:'viewer',password:'fixture'})}),cookie=login.headers.get('set-cookie').split(';')[0];
+  const request=(url,body)=>fetch(fixture.base+url,{method:body?'POST':'GET',headers:{Cookie:cookie},body:body?JSON.stringify(body):undefined});
+  const info=await (await request('/api/playback/start',{itemId:'movie-hls',startTicks:80000000})).json();
+  const next=async path=>(await (await request(path)).text()).split('\n').find(line=>line.startsWith('/api/'));
+  const segment=await next(await next(info.url));assert.equal((await request(segment)).status,503);
+  const failure=fixture.logs().split('\n').filter(line=>line.startsWith('{')).map(line=>JSON.parse(line)).find(line=>line.event==='playback.resource_failed');
+  assert.equal(failure.httpStatus,503);assert.equal(failure.resourceKind,'media');assert.equal(failure.resumeSeconds,8);assert.equal(failure.timeoutMs,60000);assert.match(failure.resourcePath,/segment000\.ts$/);assert.doesNotMatch(JSON.stringify(failure),/secret|api_key|private upstream|must-never/);
+});
+
 test('full playback negotiates, proxies HLS/ranges/subtitles, reports progress and isolates sessions',async t=>{
   const fixture=await startPlaybackFixture();t.after(()=>fixture.close());
   const request=(route,{cookie,method='GET',body,headers={}}={})=>fetch(fixture.base+route,{method,headers:{...(cookie?{Cookie:cookie}:{}),...headers},body:body?JSON.stringify(body):undefined});

@@ -1,3 +1,4 @@
+import {hlsLoadPolicies} from './playback-policy.js';
 import { createCarousel, carouselPlaceholder } from './carousel.js';
 export { carouselPlaceholder };
 export const minutes=ticks=>ticks?Math.round(ticks/600000000)+' min':'';
@@ -39,12 +40,13 @@ export function mountDetailPreview({api,itemId,root}){
       };
       target.ontimeupdate=()=>{if(target.currentTime>=info.startSeconds+info.clipSeconds)finish('Preview ended.')};
       target.onended=()=>finish('Preview ended.');target.onerror=()=>finish('The preview could not be decoded. Try again or use the full player’s quality settings.');
-      if(info.hls&&!target.canPlayType('application/vnd.apple.mpegurl')){
+      if(info.hls){
         const {default:Hls}=await import('./vendor/hls.min.mjs');if(disposed||target!==video)return;
-        if(!Hls.isSupported())throw Error('This browser does not support HLS previews.');
-        hls=new Hls({enableWorker:true,startPosition:info.startSeconds,maxBufferLength:10,maxMaxBufferLength:20,backBufferLength:0});
-        hls.on(Hls.Events.ERROR,(_,error)=>{if(error.fatal)finish('Jellyfin could not deliver a playable preview. Try again or check its transcoding logs.')});
-        hls.attachMedia(target);hls.loadSource(info.url);
+        if(Hls.isSupported()){
+          hls=new Hls({...hlsLoadPolicies(Hls),enableWorker:true,startPosition:info.startSeconds,maxBufferLength:10,maxMaxBufferLength:20,backBufferLength:0});
+          hls.on(Hls.Events.ERROR,(_,error)=>{if(error.fatal)finish('Jellyfin could not deliver a playable preview. Try again or check its transcoding logs.')});
+          hls.attachMedia(target);hls.loadSource(info.url);
+        }else if(target.canPlayType('application/vnd.apple.mpegurl'))target.src=info.url;else throw Error('This browser does not support HLS previews.');
       }else target.src=info.url;
     }catch(error){finish(error.message)}
   };

@@ -79,10 +79,12 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
   async function proxy(req,res,ticket,target){
     await authorize(ticket);
     const range=req.headers.range;if(range&&!/^bytes=(\d+-\d*|-\d+)$/.test(range))fail(416,'Invalid byte range');
-    const controller=new AbortController(),abort=()=>controller.abort();res.once('close',abort);const timeout=setTimeout(abort,12000);
+    const startedAt=Date.now(),timeoutMs=ticket.method==='DirectPlay'?30000:60000,kind=/\.m3u8$/i.test(target.pathname)?'playlist':'media';let timedOut=false;
+    const controller=new AbortController(),abort=()=>controller.abort();res.once('close',abort);const timeout=setTimeout(()=>{timedOut=true;abort()},timeoutMs);
+    const diagnostic=(code,status)=>logger.log('warn','playback.resource_failed',{itemId:ticket.itemId,resourceKind:kind,resourcePath:target.pathname,method:req.method,code,...(status?{httpStatus:status}:{}),resumeSeconds:ticket.positionTicks/10000000,durationMs:Date.now()-startedAt,timeoutMs});
     try{
       const response=await fetch(target,{method:req.method,headers:{Authorization:authHeader(ticket.owner,ticket.owner.deviceId),'Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:controller.signal,redirect:'error'});clearTimeout(timeout);
-      if(![200,206,416].includes(response.status)){await response.body?.cancel();fail(response.status>=400?response.status:502,'Jellyfin could not deliver this part of the stream.')}
+      if(![200,206,416].includes(response.status)){diagnostic('HTTP_ERROR',response.status);await response.body?.cancel();fail(response.status>=400?response.status:502,'Jellyfin could not deliver this part of the stream.')}
       if(/\.m3u8$/i.test(target.pathname)){
         const raw=await boundedText(response,2097152),body=rewritePlaylist(raw,target,url=>register(ticket,url,target));
         send(res,200,body,{'Content-Type':'application/vnd.apple.mpegurl','Cache-Control':'private, no-store','Vary':'Cookie'});return;
@@ -93,7 +95,7 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
       for(const key of ['content-length','content-range','accept-ranges'])if(response.headers.has(key))headers[key]=response.headers.get(key);
       res.writeHead(response.status,headers);
       if(req.method==='HEAD'||!response.body){res.end();await response.body?.cancel()}else await pipeline(Readable.fromWeb(response.body),res);
-    }catch(error){if(!controller.signal.aborted)throw error;if(!res.destroyed&&!res.writableEnded){if(!res.headersSent)fail(504,'Jellyfin playback timed out.');res.destroy()}}
+    }catch(error){if(!controller.signal.aborted){if(!error.publicMessage)diagnostic('NETWORK_ERROR');throw error}if(timedOut)diagnostic('TIMEOUT',504);if(!res.destroyed&&!res.writableEnded){if(!res.headersSent)fail(504,'Jellyfin took too long to deliver the stream. Try a lower quality and check Jellyfin transcoding logs.');res.destroy()}}
     finally{clearTimeout(timeout);res.off('close',abort)}
   }
   return async(req,res,url,owner)=>{
@@ -157,7 +159,7 @@ export function createPlayback({jf,jellyfin,authHeader,json,readBody,cleanId,sen
         episodes=(list.Items||[]).filter(i=>!i.IsMissing&&!i.IsVirtualItem).map(episodeDto);seasons=(seasonList.Items||[]).map(i=>({id:i.Id,name:i.Name}));ticket.seasons=new Set(seasons.map(s=>s.id));
         const index=(neighbors.Items||[]).findIndex(i=>i.Id===item.Id);if(index>=0&&neighbors.Items[index+1])nextEpisode=episodeDto(neighbors.Items[index+1]);
       }
-      logger.log('info','playback.negotiated',{itemId:item.Id,method:playMethod,preview});
+      logger.log('info','playback.negotiated',{itemId:item.Id,method:playMethod,preview,resumeSeconds:position/10000000});
       json(res,200,{id,preview,clipSeconds:preview?20:undefined,item:{id:item.Id,name:item.Name,series:item.SeriesName||'',type:item.Type,year:item.ProductionYear,rating:item.OfficialRating,genres:item.Genres||[]},url:resource,method:playMethod,hls:!useDirect,offsetSeconds:0,startSeconds:position/10000000,runtimeSeconds:(item.RunTimeTicks||source.RunTimeTicks||0)/10000000,sourceId:source.Id,sources:info.MediaSources.map(sourceDto),audioIndex:input.audioIndex??source.DefaultAudioStreamIndex??null,subtitleIndex,tracks,subtitle:selectedSubtitle&&textCodecs.has((selectedSubtitle.Codec||'').toLowerCase())?`/api/playback/${id}/subtitle/${selectedSubtitle.Index}`:null,chapters:(item.Chapters||[]).map((chapter,index)=>({index,name:chapter.Name||`Chapter ${index+1}`,startTicks:chapter.StartPositionTicks,image:!!chapter.ImageTag})),segments,episodes,seasons,seasonId:item.SeasonId||null,nextEpisode});return true;
     }
     const episodeRoute=path.match(/^\/api\/playback\/([a-f0-9]{48})\/episodes$/);
