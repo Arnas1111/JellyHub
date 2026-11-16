@@ -1,3 +1,4 @@
+import {seriesProgress} from './series-progress.js';
 import {visibleItems} from './core.js';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -38,6 +39,7 @@ export function createMedia({jf,jellyfin,authHeader,json,cleanId,send,getConfig=
       const data=await jf(`Users/${session.id}/Items/Resume?${q}`,session);
       json(res,200,{Items:visibleItems(data.Items||[],getConfig(),session.id).filter(i=>i.Type===(type==='Movie'?'Movie':'Episode')).map(cleanItem)});return true;
     }
+    const progress=route.match(/^\/api\/series-progress\/([^/]+)$/);if(progress&&method==='GET'){json(res,200,await seriesProgress(cleanId(progress[1]),session,jf));return true}
     const detail=route.match(/^\/api\/details\/([^/]+)$/);
     if(detail&&method==='GET'){
       const episodeStart=Number(url.searchParams.get('episodeStart')||0);if(!Number.isSafeInteger(episodeStart)||episodeStart<0||episodeStart>500000)fail(400,'Invalid episode page');

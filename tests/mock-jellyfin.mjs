@@ -16,6 +16,7 @@ export async function startPlaybackFixture(options={}){
   const streams=[{Type:'Video',Index:0,Codec:'h264',BitDepth:8,VideoRange:'SDR',Width:160,Height:90},{Type:'Audio',Index:1,Codec:'aac',Language:'eng',DisplayTitle:'English test tone',IsDefault:true},{Type:'Audio',Index:2,Codec:'aac',Language:'deu',DisplayTitle:'German test tone'},{Type:'Subtitle',Index:3,Codec:'srt',Language:'eng',DisplayTitle:'English subtitles',IsExternal:true}];
   const upstream=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://fixture'),auth=req.headers.authorization||'';let raw='';for await(const part of req)raw+=part;
+    const actor=auth.includes('secret-token-admin')?'admin':'viewer',stateFor=id=>({...movie(id).UserData,...options.watchStates?.[actor]?.[id],...userData.get(actor+':'+id)});
     const body=raw?(url.pathname.includes('/Images/Primary')?raw:JSON.parse(raw)):undefined;calls.push({path:url.pathname,query:Object.fromEntries(url.searchParams),method:req.method,body,range:req.headers.range,auth});
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data))};
     if(options.registration){
@@ -66,14 +67,14 @@ export async function startPlaybackFixture(options={}){
     if(url.pathname==='/Users/Me')return json({Id:auth.includes('secret-token-admin')?'admin':'viewer',Name:options.presence&&auth.includes('secret-token-admin')?'Administrator':'Viewer',Configuration:{AudioLanguagePreference:'eng'},Policy:policies.get(auth.includes('secret-token-admin')?'admin':'viewer')||{IsAdministrator:adminEnabled&&auth.includes('secret-token-admin'),EnableMediaPlayback:allowPlayback}});
     if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'movies-view',Name:'Main movies',CollectionType:'movies'},{Id:'shows-view',Name:'Main shows',CollectionType:'tvshows'},{Id:'music-view',Name:'Music',CollectionType:'music'}]});
     if(url.pathname==='/Items/Filters2')return json({Genres:[{Name:'Test'}],Years:[2026]});
-    if(/^\/Users\/[^/]+\/(FavoriteItems|PlayedItems)\//.test(url.pathname)){const id=url.pathname.split('/').at(-1),value={...userData.get(id),[url.pathname.includes('FavoriteItems')?'IsFavorite':'Played']:req.method==='POST'};userData.set(id,value);return json(value)}
+    if(/^\/Users\/[^/]+\/(FavoriteItems|PlayedItems)\//.test(url.pathname)){const id=url.pathname.split('/').at(-1),value={...stateFor(id),[url.pathname.includes('FavoriteItems')?'IsFavorite':'Played']:req.method==='POST'};userData.set(actor+':'+id,value);return json(value)}
     if(url.pathname.endsWith('/Configuration')&&req.method==='POST'||url.pathname==='/Users/Password'){res.writeHead(204);return res.end()}
     if(url.pathname==='/Users/viewer/Items/forbidden')return json({error:'Forbidden'},403);
-    const item=url.pathname.match(/^\/Users\/[^/]+\/Items\/([^/]+)$/);if(item)return json({...movie(item[1]),MediaSources:[{Id:'source1',MediaStreams:streams}],MediaStreams:streams,UserData:{...movie(item[1]).UserData,...userData.get(item[1])},Path:'/private/never-return.mp4'});
+    const item=url.pathname.match(/^\/Users\/[^/]+\/Items\/([^/]+)$/);if(item)return json({...movie(item[1]),MediaSources:[{Id:'source1',MediaStreams:streams}],MediaStreams:streams,UserData:stateFor(item[1]),Path:'/private/never-return.mp4'});
     if(url.pathname.endsWith('/Items/Resume'))return json({Items:[movie('movie-direct')]});
     if(url.pathname.endsWith('/Items')){
       if(url.searchParams.get('IncludeItemTypes')==='BoxSet'){const items=[{Id:'collection',Name:'Test Collection',Type:'BoxSet'},...(options.management?[{Id:'managed-movies',Name:'Basic Movies',Type:'BoxSet'},{Id:'managed-shows',Name:'Basic Shows',Type:'BoxSet'}]:[])].filter(item=>!url.searchParams.get('ExcludeItemIds')?.split(',').includes(item.Id));return json({Items:items,TotalRecordCount:items.length})}
-      let items=[movie('movie-direct'),movie('movie-hls')].map(item=>({...item,UserData:{...item.UserData,...userData.get(item.Id)}}));
+      let items=[movie('movie-direct'),movie('movie-hls')].map(item=>({...item,UserData:stateFor(item.Id)}));
       if(url.searchParams.get('Ids'))items=items.filter(item=>url.searchParams.get('Ids').split(',').includes(item.Id));
       if(url.searchParams.get('ExcludeItemIds'))items=items.filter(item=>!url.searchParams.get('ExcludeItemIds').split(',').includes(item.Id));
       if(url.searchParams.get('Filters')==='IsFavorite')items=items.filter(item=>item.UserData.IsFavorite);
@@ -82,7 +83,7 @@ export async function startPlaybackFixture(options={}){
     if(url.pathname==='/Shows/NextUp')return json({Items:[movie('episode1')]});
     if(url.pathname==='/Shows/serieslong/Episodes'){const start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:Array.from({length:105},(_,index)=>({...movie('episode'+(index+1)),IndexNumber:index+1,Name:'Long episode '+(index+1),SeriesId:'serieslong'})).slice(start,start+limit),TotalRecordCount:105})}
     if(url.pathname==='/Shows/serieslong/Seasons')return json({Items:[{Id:'seasonlong',Name:'Season 1'}]});
-    if(url.pathname==='/Shows/series/Episodes'){if(options.episodeSeasons){const season=url.searchParams.get('SeasonId')||'season1',items=options.episodeSeasons[season]||[],start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:items.map((item,index)=>({...movie(item.Id),...item,SeasonId:season,ParentIndexNumber:season==='season1'?1:2,IndexNumber:index+1})).slice(start,start+limit),TotalRecordCount:items.length})}return json({Items:[movie('episode1'),movie('episode2')],TotalRecordCount:2})}
+    if(url.pathname==='/Shows/series/Episodes'){let items;if(options.episodeSeasons){const selected=url.searchParams.get('SeasonId');items=Object.entries(options.episodeSeasons).filter(([season])=>!selected||season===selected).flatMap(([season,rows],seasonIndex)=>rows.map((item,index)=>({...movie(item.Id),...item,SeasonId:season,ParentIndexNumber:Number(season.replace(/\D/g,''))||seasonIndex+1,IndexNumber:index+1,UserData:{...stateFor(item.Id),...item.UserData,...userData.get(actor+':'+item.Id)}})))}else items=['episode1','episode2'].map(id=>({...movie(id),UserData:stateFor(id)}));const start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:items.slice(start,start+limit),TotalRecordCount:items.length})}
     if(url.pathname==='/Shows/series/Seasons')return json({Items:options.episodeSeasons?Object.keys(options.episodeSeasons).map((Id,index)=>({Id,Name:'Season '+(index+1)})):[{Id:'season1',Name:'Season 1'}]});
     if(url.pathname.endsWith('/Similar'))return json({Items:options.similar||[]});
     if(options.similar&&/^\/Items\/[^/]+\/Images\/Primary$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
@@ -93,7 +94,7 @@ export async function startPlaybackFixture(options={}){
       return json({PlaySessionId:'play-session-'+(++startedCount),MediaSources:[{Id:'source1',Name:'Synthetic version',Container:transcode?'mkv':'mp4',SupportsDirectPlay:!transcode,SupportsDirectStream:false,SupportsTranscoding:true,DefaultAudioStreamIndex:1,MediaStreams:streams,Path:'/private/source.mkv',Size:bytes.length,TranscodingUrl:`/videos/${streamId}/master.m3u8?api_key=must-never-reach-browser&PlaySessionId=test`}]});
     }
     if(url.pathname.startsWith('/MediaSegments/'))return json({Items:options.segments||[{Id:'intro',Type:'Intro',StartTicks:10000000,EndTicks:30000000}]});
-    if(url.pathname.startsWith('/Sessions/Playing')){reports.push({path:url.pathname,body});res.writeHead(204);return res.end()}
+    if(url.pathname.startsWith('/Sessions/Playing')){if(options.recordWatchState&&url.pathname.endsWith('/Stopped')){const played=body.PositionTicks>=movie(body.ItemId).RunTimeTicks*.9;userData.set(actor+':'+body.ItemId,{...stateFor(body.ItemId),Played:played,PlaybackPositionTicks:played?0:body.PositionTicks})}reports.push({path:url.pathname,body});res.writeHead(204);return res.end()}
     if(url.pathname==='/Videos/ActiveEncodings'){res.writeHead(204);return res.end()}
     if(/\/Subtitles\/3\/(0\/)?Stream\.vtt$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'text/vtt'});return res.end(await fixture('subtitles.vtt'))}
     if(url.pathname.endsWith('/master.m3u8')){res.writeHead(200,{'Content-Type':'application/vnd.apple.mpegurl'});return res.end('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=240000,CODECS="avc1.64000a,mp4a.40.2",RESOLUTION=160x90\nmain.m3u8?api_key=must-never-reach-browser\n')}

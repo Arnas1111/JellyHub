@@ -21,7 +21,7 @@ const defaults={autoPause:false,autoResume:false,autoNext:true,autoSkipIntro:fal
 const clock=seconds=>{const value=Math.max(0,Math.floor(seconds||0));return (value>=3600?Math.floor(value/3600)+':':'')+String(Math.floor(value/60)%60).padStart(2,'0')+':'+String(value%60).padStart(2,'0')};
 const ticks=seconds=>Math.max(0,Math.round((seconds||0)*10000000));
 
-export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTicks,onReady=()=>{}}){
+export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTicks,onReady=()=>{},onCompleted=()=>{}}){
   let endedReport=false;
   let scrubbing=false,initialPositionApplied=false,keyboardControls=false;
   let info,hls,prefs={...defaults},disposed=false,started=false,restarting=false,reportQueue=Promise.resolve(),hideTimer,reportTimer,nextTimer,startInfoTimer,holdTimer,priorRate,suppressClick=false,wasPlaying=false,autoSkipped=new Set(),nextCancelled=false;
@@ -94,7 +94,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
       panel.querySelector('[name="rate"]').onchange=event=>{video.playbackRate=Number(event.target.value);prefs.rate=video.playbackRate;savePreferences({rate:prefs.rate})};
       panel.querySelector('[name="auto-skip"]').onchange=event=>{prefs.autoSkipIntro=event.target.checked;savePreferences({autoSkipIntro:prefs.autoSkipIntro})};
       panel.querySelector('[name="auto-next"]').onchange=event=>{prefs.autoNext=event.target.checked;savePreferences({autoNext:prefs.autoNext})};
-    }else if(kind==='episodes')panel.innerHTML=`<div class="player-panel-heading"><h2>Episodes</h2>${button('close-panel','Close panel','close')}</div>${info.seasons?.length?`<label>Season<select class="input" aria-label="Episode season">${info.seasons.map(season=>`<option value="${e(season.id)}" ${season.id===info.seasonId?'selected':''}>${e(season.name)}</option>`).join('')}</select></label>`:''}<div class="player-episode-list">${info.episodes.map(episode=>`<button class="player-episode ${episode.id===info.item.id?'current':''}" data-episode="${e(episode.id)}">${episode.image&&(!prefs.spoilerGuard||episode.played)?`<img src="/api/image/${encodeURIComponent(episode.id)}" alt="" loading="lazy"/>`:''}<span><small>S${episode.season||1} · E${episode.episode||'?'}</small><strong>${e(prefs.spoilerGuard&&!episode.played?'Episode '+episode.episode:episode.name)}</strong></span></button>`).join('')}</div><button class="ghost" data-more-episodes ${info.episodes.length<100?'hidden':''}>Load more episodes</button>`;
+    }else if(kind==='episodes')panel.innerHTML=`<div class="player-panel-heading"><h2>Episodes</h2>${button('close-panel','Close panel','close')}</div>${info.seasons?.length?`<label>Season<select class="input" aria-label="Episode season">${info.seasons.map(season=>`<option value="${e(season.id)}" ${season.id===info.seasonId?'selected':''}>${e(season.name)}</option>`).join('')}</select></label>`:''}<div class="player-episode-list">${info.episodes.map(episode=>`<button class="player-episode ${episode.id===info.item.id?'current':''}" data-episode="${e(episode.id)}">${episode.image&&(!prefs.spoilerGuard||episode.played)?`<img src="/api/image/${encodeURIComponent(episode.id)}" alt="" loading="lazy"/>`:''}<span><small>S${episode.season??1} · E${episode.episode||'?'}</small><strong>${e(prefs.spoilerGuard&&!episode.played?'Episode '+episode.episode:episode.name)}</strong></span></button>`).join('')}</div><button class="ghost" data-more-episodes ${info.episodes.length<100?'hidden':''}>Load more episodes</button>`;
     else panel.innerHTML=`<div class="player-panel-heading"><h2>Chapters</h2>${button('close-panel','Close panel','close')}</div>${info.chapters.map(chapter=>`<button class="player-chapter" data-seek="${chapter.startTicks/10000000}"><span>${clock(chapter.startTicks/10000000)}</span>${e(prefs.spoilerGuard?'Chapter '+(chapter.index+1):chapter.name)}</button>`).join('')}`;
     if(kind==='episodes'){
       const season=panel.querySelector('[aria-label="Episode season"]'),more=panel.querySelector('[data-more-episodes]');let offset=info.episodes.length;
@@ -130,7 +130,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
   video.onwaiting=()=>{if(info&&!video.paused){loading.hidden=false;loading.textContent='Buffering…'}};
   video.ontimeupdate=()=>{if(!info||scrubbing)return;seek.value=String(position());root.querySelector('.player-time').textContent=clock(position())+' / '+clock(runtime());checkSegments();showNext(video.ended)};
   video.onseeked=()=>{if(started&&!restarting&&!scrubbing)queueReport('progress').catch(()=>{})};
-  video.onended=()=>{clearInterval(reportTimer);reportTimer=null;if(started){queueReport('stop',true).catch(()=>{});endedReport=true}showNext(true);showControls()};
+  video.onended=()=>{clearInterval(reportTimer);reportTimer=null;if(started){queueReport('stop',true).then(()=>{if(!disposed)onCompleted()}).catch(()=>{});endedReport=true}showNext(true);showControls()};
   video.onerror=()=>{if(!info||restarting)return;showFailure('This stream could not play. Try a lower quality or a different audio track.')};
   seek.onpointerdown=()=>{scrubbing=true;showControls()};
   seek.oninput=()=>{scrubbing=true;root.querySelector('.player-time').textContent=clock(Number(seek.value))+' / '+clock(runtime());showControls()};
