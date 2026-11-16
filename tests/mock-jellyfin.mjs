@@ -82,8 +82,8 @@ export async function startPlaybackFixture(options={}){
     if(url.pathname==='/Shows/NextUp')return json({Items:[movie('episode1')]});
     if(url.pathname==='/Shows/serieslong/Episodes'){const start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:Array.from({length:105},(_,index)=>({...movie('episode'+(index+1)),IndexNumber:index+1,Name:'Long episode '+(index+1),SeriesId:'serieslong'})).slice(start,start+limit),TotalRecordCount:105})}
     if(url.pathname==='/Shows/serieslong/Seasons')return json({Items:[{Id:'seasonlong',Name:'Season 1'}]});
-    if(url.pathname==='/Shows/series/Episodes')return json({Items:[movie('episode1'),movie('episode2')],TotalRecordCount:2});
-    if(url.pathname==='/Shows/series/Seasons')return json({Items:[{Id:'season1',Name:'Season 1'}]});
+    if(url.pathname==='/Shows/series/Episodes'){if(options.episodeSeasons){const season=url.searchParams.get('SeasonId')||'season1',items=options.episodeSeasons[season]||[],start=Number(url.searchParams.get('StartIndex')||0),limit=Number(url.searchParams.get('Limit')||100);return json({Items:items.map((item,index)=>({...movie(item.Id),...item,SeasonId:season,ParentIndexNumber:season==='season1'?1:2,IndexNumber:index+1})).slice(start,start+limit),TotalRecordCount:items.length})}return json({Items:[movie('episode1'),movie('episode2')],TotalRecordCount:2})}
+    if(url.pathname==='/Shows/series/Seasons')return json({Items:options.episodeSeasons?Object.keys(options.episodeSeasons).map((Id,index)=>({Id,Name:'Season '+(index+1)})):[{Id:'season1',Name:'Season 1'}]});
     if(url.pathname.endsWith('/Similar'))return json({Items:options.similar||[]});
     if(options.similar&&/^\/Items\/[^/]+\/Images\/Primary$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'image/png'});return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2kAAAAASUVORK5CYII=','base64'))}
     const info=url.pathname.match(/^\/Items\/([^/]+)\/PlaybackInfo$/);
