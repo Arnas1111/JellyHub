@@ -110,7 +110,7 @@ export function mountPlayer({root,api,itemId,onClose,onPlay,escapeHTML:e,startTi
     const type=String(segment.type),key=segment.id||type+segment.startTicks;
     const auto=(prefs.autoSkipIntro&&['Intro','Recap'].includes(type)||prefs.autoSkipOutro&&type==='Outro')&&!autoSkipped.has(key);
     if(auto){autoSkipped.add(key);seekTo(segment.endTicks/10000000);return}
-    box.hidden=false;box.querySelector('button').textContent='Skip '+type.toLowerCase();box.querySelector('button').onclick=()=>{autoSkipped.add(key);seekTo(segment.endTicks/10000000);box.hidden=true};
+    box.dataset.segment=type.toLowerCase();box.hidden=false;box.querySelector('button').textContent='Skip '+type.toLowerCase();box.querySelector('button').onclick=()=>{autoSkipped.add(key);seekTo(segment.endTicks/10000000);box.hidden=true};
   }
   function showNext(ended=false){
     const next=nextEpisode(),box=root.querySelector('.player-next'),count=box.querySelector('.player-next-countdown');
