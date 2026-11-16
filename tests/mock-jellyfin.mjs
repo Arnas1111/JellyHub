@@ -92,7 +92,7 @@ export async function startPlaybackFixture(options={}){
       const streamId=/^[a-f0-9]{32}$/.test(info[1])?info[1].replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,'$1-$2-$3-$4-$5'):info[1]==='movie-bad-path'?'another-item':info[1];
       return json({PlaySessionId:'play-session-'+(++startedCount),MediaSources:[{Id:'source1',Name:'Synthetic version',Container:transcode?'mkv':'mp4',SupportsDirectPlay:!transcode,SupportsDirectStream:false,SupportsTranscoding:true,DefaultAudioStreamIndex:1,MediaStreams:streams,Path:'/private/source.mkv',Size:bytes.length,TranscodingUrl:`/videos/${streamId}/master.m3u8?api_key=must-never-reach-browser&PlaySessionId=test`}]});
     }
-    if(url.pathname.startsWith('/MediaSegments/'))return json({Items:[{Id:'intro',Type:'Intro',StartTicks:10000000,EndTicks:30000000}]});
+    if(url.pathname.startsWith('/MediaSegments/'))return json({Items:options.segments||[{Id:'intro',Type:'Intro',StartTicks:10000000,EndTicks:30000000}]});
     if(url.pathname.startsWith('/Sessions/Playing')){reports.push({path:url.pathname,body});res.writeHead(204);return res.end()}
     if(url.pathname==='/Videos/ActiveEncodings'){res.writeHead(204);return res.end()}
     if(/\/Subtitles\/3\/(0\/)?Stream\.vtt$/.test(url.pathname)){res.writeHead(200,{'Content-Type':'text/vtt'});return res.end(await fixture('subtitles.vtt'))}

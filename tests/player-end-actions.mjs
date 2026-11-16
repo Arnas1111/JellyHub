@@ -1,0 +1,23 @@
+import {chromium} from 'playwright';
+import assert from 'node:assert/strict';
+import {startPlaybackFixture} from './mock-jellyfin.mjs';
+const fixture=await startPlaybackFixture({segments:[{Id:'outro',Type:'Outro',StartTicks:70000000,EndTicks:115000000}]});let browser;
+try{
+  browser=await chromium.launch(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{});
+  const page=await browser.newPage({viewport:{width:1600,height:1000},reducedMotion:'reduce'});
+  await page.goto(fixture.base);await page.getByPlaceholder('Username',{exact:true}).fill('viewer');await page.getByPlaceholder('Password',{exact:true}).fill('fixture');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.locator('#rows').waitFor();await page.clock.install();
+  const play=async id=>{await page.goto(fixture.base+'/#play/'+id);await page.waitForFunction(()=>document.querySelector('.main-video')?.videoWidth>0);await page.locator('.main-video').evaluate(video=>{video.pause();video.currentTime=8});await page.getByRole('button',{name:'Skip outro',exact:true}).waitFor()};
+  const layout=async mode=>{
+    const state=await page.locator('.player-end-actions').evaluate(row=>{const rect=el=>{const b=el.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom}};return {row:rect(row),screen:rect(row.closest('.player-screen')),controls:rect(document.querySelector('.player-controls')),buttons:[...row.querySelectorAll('button')].filter(el=>el.getClientRects().length).map(el=>({label:el.getAttribute('aria-label')||el.textContent,...rect(el)})),background:getComputedStyle(row).backgroundColor,card:getComputedStyle(row.querySelector('.player-next')).backgroundColor}});
+    assert.equal(state.background,'rgba(0, 0, 0, 0)');assert.equal(state.card,'rgba(0, 0, 0, 0)');assert.equal(state.buttons.length,3);
+    for(const b of state.buttons){assert.ok(b.left>=state.screen.left&&b.right<=state.screen.right&&b.top>=state.screen.top&&b.bottom<state.controls.top,mode+': '+JSON.stringify(state));for(const other of state.buttons)if(b!==other)assert.ok(b.right<=other.left+.5||other.right<=b.left+.5||b.bottom<=other.top+.5||other.bottom<=b.top+.5,mode+': actions overlap')}
+  };
+  await play('episode1');await layout('desktop');assert.equal(await page.locator('.player-next h2').count(),0);assert.equal(await page.locator('[data-action=next]').getAttribute('title'),'The next episode');await page.screenshot({path:'.tools/player-end-actions-desktop.png',fullPage:true});
+  await page.locator('[data-action=fullscreen]').click();await page.waitForFunction(()=>!!document.fullscreenElement);await layout('fullscreen');await page.keyboard.press('Escape');
+  await page.setViewportSize({width:390,height:844});await layout('mobile');await page.getByRole('button',{name:'Browse while watching',exact:true}).click();await page.locator('#persistent-player.player-docked').waitFor();await layout('mobile mini');await page.screenshot({path:'.tools/player-end-actions-mobile.png',fullPage:true});await page.getByRole('button',{name:'Return to player',exact:true}).click();
+  await page.getByRole('button',{name:'Skip outro',exact:true}).click();assert.ok(await page.locator('.main-video').evaluate(v=>v.currentTime>=11.4));await page.getByRole('button',{name:'Skip outro',exact:true}).waitFor({state:'hidden'});
+  await page.locator('.main-video').evaluate(v=>{v.currentTime=v.duration-.2;return v.play()});await page.waitForFunction(()=>document.querySelector('.main-video').ended);await page.clock.runFor(2000);assert.equal(await page.locator('.player-next-countdown').textContent(),'6s');await page.getByRole('button',{name:'Cancel autoplay',exact:true}).click();await page.clock.runFor(9000);assert.equal(await page.locator('.player-next').isVisible(),false);assert.equal(new URL(page.url()).hash,'#play/episode1');
+  await play('movie-direct');await play('episode1');await page.getByRole('button',{name:'Play next episode',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.player-title')?.textContent==='The next episode');
+  await play('episode1');await page.locator('.main-video').evaluate(v=>{v.currentTime=v.duration-.2;return v.play()});await page.waitForFunction(()=>document.querySelector('.main-video').ended);await page.clock.runFor(8100);await page.waitForFunction(()=>document.querySelector('.player-title')?.textContent==='The next episode');
+  console.log('Compact episode actions passed: transparent unified row without overlaps on desktop/fullscreen/mobile/mini, outro seeking, countdown, cancellation, manual next and autoplay. Jellyfin simulated.');
+}finally{await browser?.close();await fixture.close()}
